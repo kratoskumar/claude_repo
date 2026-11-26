@@ -1,0 +1,72 @@
+rules_version = '2';
+
+// Security rules for the Making Charge Calculator.
+// Only ONE account can read or write. In the isOwner() function below, replace the
+// placeholder text inside the quotes with that account's User UID
+// (Firebase console > Authentication > Users > "User UID" column).
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isOwner() {
+      return request.auth != null && request.auth.uid == 'PASTE-YOUR-UID-HERE';
+    }
+
+    function str(v, min, max) {
+      return v is string && v.size() >= min && v.size() <= max;
+    }
+
+    function pos(v) {
+      return v is number && v > 0 && v < 1000000000000;
+    }
+
+    function amount(v) {
+      return v is number && v > -1000000000000 && v < 1000000000000;
+    }
+
+    function validItem(d) {
+      return d.keys().hasOnly(['name', 'link', 'notes', 'market', 'date', 'price', 'cur', 'wt', 'k', 'pf',
+                               'other', 'taxIncl', 'taxPct', 'rate24', 'rateManual', 'fx', 'duty',
+                               'gold', 'making', 'pct', 'perGram', 'preTax', 'thumb', 'photo', 'ts', 'upd'])
+        && d.keys().hasAll(['name', 'market', 'date', 'price', 'cur', 'wt', 'k', 'pf', 'rate24',
+                            'gold', 'making', 'pct', 'ts', 'upd'])
+        && str(d.name, 1, 120)
+        && str(d.get('link', ''), 0, 2000)
+        && str(d.get('notes', ''), 0, 1000)
+        && d.market in ['US', 'IN']
+        && d.cur in ['USD', 'INR']
+        && d.date is string && d.date.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}')
+        && pos(d.price) && pos(d.wt) && pos(d.rate24)
+        && str(d.k, 1, 6)
+        && d.pf is number && d.pf > 0 && d.pf <= 1
+        && amount(d.get('other', 0)) && d.get('other', 0) >= 0
+        && d.get('taxIncl', false) is bool
+        && d.get('taxPct', 0) is number && d.get('taxPct', 0) >= 0 && d.get('taxPct', 0) <= 50
+        && d.get('rateManual', false) is bool
+        && (d.get('fx', null) == null || pos(d.get('fx', null)))
+        && d.get('duty', 0) is number && d.get('duty', 0) >= 0 && d.get('duty', 0) <= 100
+        && amount(d.gold) && amount(d.making) && amount(d.pct)
+        && amount(d.get('perGram', 0)) && amount(d.get('preTax', 0))
+        && str(d.get('thumb', ''), 0, 40000)
+        && d.get('photo', false) is bool
+        && d.ts is number && d.upd is number;
+    }
+
+    match /items/{id} {
+      allow read, delete: if isOwner();
+      allow create, update: if isOwner() && validItem(request.resource.data);
+    }
+
+    match /photos/{id} {
+      allow read, delete: if isOwner();
+      allow create, update: if isOwner()
+        && request.resource.data.keys().hasOnly(['d'])
+        && request.resource.data.d is string
+        && request.resource.data.d.size() < 900000
+        && request.resource.data.d.matches('data:image/(webp|jpeg);base64,[A-Za-z0-9+/=]+');
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

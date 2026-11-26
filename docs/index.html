@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://www.gstatic.com; style-src 'self'; img-src 'self' data: blob: https://www.google.com; connect-src 'self' https://www.gstatic.com https://api.gold-api.com https://cdn.jsdelivr.net https://*.currency-api.pages.dev https://api.frankfurter.dev https://*.googleapis.com; object-src 'none'; base-uri 'self'; form-action 'self'">
+<title>Making Charge Calculator</title>
+<meta name="description" content="Work out jewellery making charges from price, weight and the gold rate, in USD or INR.">
+<meta name="theme-color" content="#a8741a">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-180.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Making Charge">
+<link rel="stylesheet" href="app.css">
+<link rel="modulepreload" href="calc.js">
+<link rel="modulepreload" href="rates.js">
+<script type="module" src="app.js"></script>
+</head>
+<body>
+<header class="top">
+  <h1>Making Charge</h1>
+  <nav class="tabs" aria-label="Views">
+    <button type="button" class="tab" id="tabCalc" aria-pressed="true">Calculator</button>
+    <button type="button" class="tab" id="tabSaved" aria-pressed="false">Saved <span id="savedCount" class="count" hidden></span></button>
+  </nav>
+  <button type="button" class="icon" id="settingsBtn" aria-label="Settings">
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.49.49 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.48.48 0 0 0-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96a.49.49 0 0 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32a.49.49 0 0 0-.12-.61l-2.01-1.58zM12 15.6a3.6 3.6 0 1 1 0-7.2 3.6 3.6 0 0 1 0 7.2z"/></svg>
+  </button>
+</header>
+
+<main>
+<section id="calcView" aria-label="Calculator">
+  <div id="editBanner" class="banner" hidden>Editing <b id="editName"></b> <button type="button" class="link" id="cancelEdit">Stop editing</button></div>
+
+  <div class="card">
+    <div class="seg" id="marketSeg" role="group" aria-label="Gold rate market">
+      <button type="button" data-v="US">US rate</button>
+      <button type="button" data-v="IN">India rate</button>
+    </div>
+    <div class="row">
+      <label class="grow">Rate date
+        <input type="date" id="date" required>
+      </label>
+      <button type="button" class="chip" id="todayBtn">Today</button>
+    </div>
+    <p class="status" id="rateStatus" aria-live="polite">Fetching rates…</p>
+    <div class="grid2">
+      <label><span id="r24Label">24K rate</span>
+        <input id="r24" inputmode="decimal" autocomplete="off" enterkeyhint="next">
+      </label>
+      <label id="rKWrap"><span id="rKLabel">22K rate</span>
+        <input id="rK" inputmode="decimal" autocomplete="off" enterkeyhint="next">
+      </label>
+    </div>
+    <p class="sub"><span id="rateSub"></span> <button type="button" class="link" id="resetRate" hidden>Use market rate</button></p>
+    <div class="row fx">
+      <label class="grow">1 USD in INR (₹)
+        <input id="fx" inputmode="decimal" autocomplete="off">
+      </label>
+      <p class="sub" id="fxStatus"></p>
+    </div>
+    <p class="sub"><button type="button" class="link" id="resetFx" hidden>Use market FX rate</button></p>
+    <p class="note" id="dutyNote" hidden></p>
+  </div>
+
+  <div class="card">
+    <label>Item price
+      <span class="with-seg">
+        <input id="price" inputmode="decimal" autocomplete="off" placeholder="e.g. 1,25,000" enterkeyhint="next">
+        <span class="seg small" id="curSeg" role="group" aria-label="Price currency">
+          <button type="button" data-v="USD">$ USD</button>
+          <button type="button" data-v="INR">₹ INR</button>
+        </span>
+      </span>
+    </label>
+    <p class="sub" id="priceConv"></p>
+    <div class="grid2">
+      <label>Gold weight (grams)
+        <input id="wt" inputmode="decimal" autocomplete="off" placeholder="e.g. 12.5" enterkeyhint="next">
+      </label>
+      <label>Purity
+        <select id="purity"></select>
+      </label>
+    </div>
+    <label id="customWrap" hidden>Custom purity (% of 24K)
+      <input id="customPct" inputmode="decimal" autocomplete="off" placeholder="e.g. 91.6">
+    </label>
+    <div class="row tax">
+      <label class="check"><input type="checkbox" id="taxIncl"> Price includes <span id="taxName">GST</span></label>
+      <label class="tiny-wrap"><input id="taxPct" inputmode="decimal" autocomplete="off" class="tiny" aria-label="Tax percent"> %</label>
+    </div>
+    <label>Stones / other charges <small>(optional, before tax, in item currency)</small>
+      <input id="other" inputmode="decimal" autocomplete="off" placeholder="0">
+    </label>
+  </div>
+
+  <div class="card result" aria-live="polite">
+    <div class="headline">
+      <span>Making charge</span>
+      <strong id="mkAmt">—</strong>
+      <small id="mkAlt"></small>
+    </div>
+    <div class="kpis">
+      <div><b id="mkPct">—</b><span>of gold value</span></div>
+      <div><b id="mkPg">—</b><span>per gram</span></div>
+    </div>
+    <p class="warn" id="warn" hidden></p>
+    <dl class="breakdown" id="breakdown"></dl>
+    <div class="actions">
+      <button type="button" class="primary" id="saveBtn">Save</button>
+      <button type="button" id="clearBtn">Clear</button>
+    </div>
+  </div>
+  <p class="foot">Gold: gold-api.com (live) and daily reference rates (currency-api). FX: daily reference rates, Frankfurter (ECB). Rates are indicative.</p>
+</section>
+
+<section id="savedView" aria-label="Saved items" hidden>
+  <div id="savedGate" class="card center"></div>
+  <div id="savedBody" hidden>
+    <input type="search" id="search" placeholder="Search saved items" aria-label="Search saved items">
+    <ul id="list" class="list"></ul>
+    <p id="empty" class="center sub" hidden>No saved items yet. Use Save on the calculator.</p>
+  </div>
+</section>
+</main>
+
+<dialog id="saveDlg" aria-labelledby="saveTitle">
+  <form method="dialog" id="saveForm" novalidate>
+    <h2 id="saveTitle">Save calculation</h2>
+    <label>Name
+      <input id="sName" maxlength="120" required autocomplete="off">
+    </label>
+    <label>Product link <small>(optional)</small>
+      <input id="sLink" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="https://…">
+    </label>
+    <label>Notes <small>(optional)</small>
+      <textarea id="sNotes" maxlength="1000" rows="2"></textarea>
+    </label>
+    <div class="photo-pick">
+      <img id="sPreview" alt="" hidden>
+      <div>
+        <label class="btn">Add photo<input type="file" id="sPhoto" accept="image/*" class="visually-hidden"></label>
+        <button type="button" class="link" id="sRemovePhoto" hidden>Remove photo</button>
+        <p class="sub" id="sPhotoMsg">Optional. Shrunk to a small size before saving.</p>
+      </div>
+    </div>
+    <p class="warn" id="sErr" hidden></p>
+    <div class="actions">
+      <button type="submit" class="primary" id="sSave" value="save">Save</button>
+      <button type="submit" id="sSaveNew" value="new" hidden>Save as new</button>
+      <button type="button" id="sCancel">Cancel</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="signDlg" aria-labelledby="signTitle">
+  <form method="dialog" id="signForm" novalidate>
+    <h2 id="signTitle">Sign in</h2>
+    <p class="sub">Use the family account to save and see saved items.</p>
+    <label>Email
+      <input id="email" type="email" autocomplete="username" autocapitalize="off" spellcheck="false" required>
+    </label>
+    <label>Password
+      <input id="password" type="password" autocomplete="current-password" required>
+    </label>
+    <p class="warn" id="signErr" hidden></p>
+    <div class="actions">
+      <button type="submit" class="primary" id="signBtn" value="go">Sign in</button>
+      <button type="button" id="signCancel">Cancel</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="itemDlg" aria-labelledby="iName">
+  <div class="item-detail">
+    <div class="photo-box" id="iPhotoBox"><img id="iPhoto" alt="Product photo" hidden><span id="iPhotoMsg" class="sub"></span></div>
+    <h2 id="iName"></h2>
+    <p><a id="iLink" target="_blank" rel="noopener noreferrer" hidden></a></p>
+    <p id="iNotes" class="notes" hidden></p>
+    <dl class="breakdown" id="iFacts"></dl>
+    <div class="actions">
+      <button type="button" class="primary" id="iEdit">Open in calculator</button>
+      <button type="button" class="danger" id="iDelete">Delete</button>
+      <button type="button" id="iClose" autofocus>Close</button>
+    </div>
+  </div>
+</dialog>
+
+<dialog id="setDlg" aria-labelledby="setTitle">
+  <div>
+    <h2 id="setTitle">Settings</h2>
+    <h3>India import duty (used for the India rate estimate)</h3>
+    <p class="sub">Total customs duty on gold by start date. Change it here if the government changes the duty.</p>
+    <div id="dutyRows"></div>
+    <div class="row">
+      <button type="button" class="chip" id="dutyAdd">Add change</button>
+      <button type="button" class="chip" id="dutyReset">Reset to defaults</button>
+    </div>
+    <h3>Account</h3>
+    <p class="sub" id="acctInfo">Not signed in.</p>
+    <button type="button" id="signOutBtn" hidden>Sign out of this device</button>
+    <h3>Data</h3>
+    <button type="button" id="clearRates">Clear saved gold rates on this device</button>
+    <p class="sub">Version <span id="ver"></span></p>
+    <div class="actions">
+      <button type="button" class="primary" id="setClose" autofocus>Done</button>
+    </div>
+  </div>
+</dialog>
+
+<div id="toast" class="toast" role="status" hidden></div>
+</body>
+</html>
