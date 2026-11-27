@@ -495,7 +495,7 @@ try {
     await s.waitForTimeout(500);
     check(navs === 1, 'no reload loop, navigations=' + navs);
     const keys = await s.evaluate(() => caches.keys());
-    check(keys.includes('mc-1.0.0'), 'cache ' + keys);
+    check(keys.some(k => k.startsWith('mc-')), 'cache ' + keys);
   });
 
   await step('opens and calculates with no internet', async () => {
@@ -515,19 +515,21 @@ try {
   await step('new version is picked up automatically (inputs kept)', async () => {
     const swSrc = await readFile(new URL('../docs/sw.js', import.meta.url), 'utf8');
     const appSrc = await readFile(new URL('../docs/app.js', import.meta.url), 'utf8');
-    check(swSrc.includes("const VERSION = '1.0.0'") && appSrc.includes("const VERSION = '1.0.0'"), 'versions in sync');
-    ov['sw.js'] = swSrc.replace("const VERSION = '1.0.0'", "const VERSION = '1.0.1'");
-    ov['app.js'] = appSrc.replace("const VERSION = '1.0.0'", "const VERSION = '1.0.1'");
+    const ver = src => (src.match(/const VERSION = '([^']+)'/) || [])[1];
+    check(ver(swSrc) && ver(swSrc) === ver(appSrc), 'VERSION must match in sw.js and app.js');
+    const v = ver(swSrc), next = v + '-next';
+    ov['sw.js'] = swSrc.replace(`const VERSION = '${v}'`, `const VERSION = '${next}'`);
+    ov['app.js'] = appSrc.replace(`const VERSION = '${v}'`, `const VERSION = '${next}'`);
     const before = navs;
     await s.reload();
     await until(async () => navs >= before + 2, 'automatic reload after update', 20000);
     await s.waitForLoadState();
     await s.click('#settingsBtn');
-    await waitText(s, '#ver', '1.0.1');
+    await waitText(s, '#ver', next);
     await s.click('#setClose');
     check(await s.inputValue('#price') === '649', 'inputs kept across update');
     const keys = await s.evaluate(() => caches.keys());
-    check(keys.includes('mc-1.0.1') && !keys.includes('mc-1.0.0'), 'old cache removed ' + keys);
+    check(keys.includes('mc-' + next) && !keys.includes('mc-' + v), 'old cache removed ' + keys);
   });
   await ctxS.close();
   sC.close();

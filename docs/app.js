@@ -1,7 +1,7 @@
 import * as C from './calc.js';
 import { getRates, clearCache } from './rates.js';
 
-const VERSION = '1.0.0';
+const VERSION = '1.0.1';
 const $ = id => document.getElementById(id);
 const today = () => C.localISO();
 const sleep = ms => new Promise(r => setTimeout(r, ms));
