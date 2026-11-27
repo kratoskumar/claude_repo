@@ -1,10 +1,10 @@
 // Offline support. App files are cached per version, so the app opens instantly and offline.
 // IMPORTANT: bump VERSION (and VERSION in app.js) on every change to the app files.
-const VERSION = '1.1.5';
+const VERSION = '1.2.0';
 const CACHE = 'mc-' + VERSION;
 const SDK_PREFIX = 'https://www.gstatic.com/firebasejs/12.19.0/';
 const SDK_CACHE = 'fbsdk-12.19.0';
-const FILES = ['./', 'index.html', 'app.css', 'app.js', 'calc.js', 'rates.js', 'image.js', 'cloud.js', 'admin.js', 'config.js',
+const FILES = ['./', 'index.html', 'app.css', 'app.js', 'calc.js', 'rates.js', 'image.js', 'exchange.js', 'cloud.js', 'admin.js', 'config.js',
   'manifest.webmanifest', 'icon.svg', 'icon-180.png', 'icon-192.png', 'icon-512.png'];
 
 self.addEventListener('install', e => {

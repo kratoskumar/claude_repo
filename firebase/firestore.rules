@@ -54,8 +54,9 @@ service cloud.firestore {
     }
 
     function validSettings(s) {
-      return s is map && s.keys().hasOnly(['market', 'cur', 'k', 'customPct', 'tax', 'duty', 't'])
+      return s is map && s.keys().hasOnly(['market', 'cur', 'k', 'customPct', 'tax', 'duty', 'jewellers', 't'])
         && (!('duty' in s) || (s.duty is list && s.duty.size() <= 12))
+        && (!('jewellers' in s) || (s.jewellers is list && s.jewellers.size() <= 10))
         && (!('tax' in s) || (s.tax is map && s.tax.keys().hasOnly(['US', 'IN'])))
         && (!('customPct' in s) || str(s.customPct, 0, 12))
         && (!('k' in s) || str(s.k, 1, 6));

@@ -24,6 +24,7 @@
   <h1>Making Charge</h1>
   <nav class="tabs" aria-label="Views">
     <button type="button" class="tab" id="tabCalc" aria-pressed="true">Calculator</button>
+    <button type="button" class="tab" id="tabXchg" aria-pressed="false">Exchange</button>
     <button type="button" class="tab" id="tabSaved" aria-pressed="false">Saved <span id="savedCount" class="count" hidden></span></button>
     <button type="button" class="tab" id="tabAdmin" aria-pressed="false" hidden>Admin <span id="adminDot" class="dot" hidden></span></button>
   </nav>
@@ -120,6 +121,85 @@
     </div>
   </div>
   <p class="foot">Gold: gold-api.com (live) and daily reference rates (currency-api). FX: daily reference rates, Frankfurter (ECB). Rates are indicative.</p>
+</section>
+
+<section id="xchgView" aria-label="Gold exchange" hidden>
+  <div class="card">
+    <div class="seg" id="xMarketSeg" role="group" aria-label="Gold rate market">
+      <button type="button" data-v="US">US rate</button>
+      <button type="button" data-v="IN">India rate</button>
+    </div>
+    <p class="status" id="xRateStatus" aria-live="polite">Fetching rates…</p>
+    <label><span id="xRateLabel">24K rate today</span>
+      <input id="xRate" inputmode="decimal" autocomplete="off">
+    </label>
+    <p class="sub"><button type="button" class="link" id="xResetRate" hidden>Use market rate</button></p>
+  </div>
+
+  <div class="card">
+    <h2 class="card-h">Your gold</h2>
+    <div class="grid2">
+      <label>Weight
+        <span class="with-seg">
+          <input id="xWt" inputmode="decimal" autocomplete="off" placeholder="e.g. 1" enterkeyhint="next">
+          <span class="seg small" id="xUnitSeg" role="group" aria-label="Weight unit">
+            <button type="button" data-v="oz">oz</button>
+            <button type="button" data-v="g">g</button>
+          </span>
+        </span>
+      </label>
+      <label>Purity
+        <select id="xPurity"></select>
+      </label>
+    </div>
+    <label>What you paid <small>(optional, shows your gain)</small>
+      <input id="xPaid" inputmode="decimal" autocomplete="off" placeholder="0">
+    </label>
+  </div>
+
+  <div class="card">
+    <h2 class="card-h">Jeweller</h2>
+    <div class="row">
+      <label class="grow">Exchanging at
+        <select id="xJw"></select>
+      </label>
+      <button type="button" class="chip" id="xJwEdit">Edit</button>
+    </div>
+    <p class="sub" id="xJwSub"></p>
+  </div>
+
+  <div class="card">
+    <h2 class="card-h">Jewellery</h2>
+    <label>Price before tax
+      <input id="xPrice" inputmode="decimal" autocomplete="off" placeholder="e.g. 3,500" enterkeyhint="next">
+    </label>
+    <p class="sub"><span id="xFrom"></span> <button type="button" class="link" id="xUseCalc">Use Calculator item</button></p>
+    <div class="row tax">
+      <span><span id="xTaxName">Sales tax</span></span>
+      <label class="tiny-wrap"><input id="xTax" inputmode="decimal" autocomplete="off" class="tiny" aria-label="Tax percent" placeholder="0"> %</label>
+    </div>
+    <label class="check top-gap"><input type="checkbox" id="xTaxBal"> Tax only on the balance after exchange</label>
+    <p class="sub">Off = tax on the full price, the safer estimate. Rules differ by store and state, so ask the jeweller.</p>
+  </div>
+
+  <div class="card result" aria-live="polite">
+    <div class="headline">
+      <span id="xHeadLabel">You pay</span>
+      <strong id="xAmt">—</strong>
+      <small id="xAlt"></small>
+    </div>
+    <div class="kpis">
+      <div><b id="xCredit">—</b><span>exchange credit</span></div>
+      <div><b id="xTotal">—</b><span>jewellery + tax</span></div>
+    </div>
+    <p class="warn" id="xWarn" hidden></p>
+    <dl class="breakdown" id="xBreakdown"></dl>
+    <div id="xCompareWrap" hidden>
+      <h3 class="card-h small">Credit at your jewellers</h3>
+      <dl class="breakdown" id="xCompare"></dl>
+    </div>
+  </div>
+  <p class="foot">Uses today's gold rate. The jeweller's own rate on the day decides the final amount.</p>
 </section>
 
 <section id="savedView" aria-label="Saved items" hidden>
@@ -227,6 +307,21 @@
     <p class="sub">Version <span id="ver"></span></p>
     <div class="actions">
       <button type="button" class="primary" id="setClose" autofocus>Done</button>
+    </div>
+  </div>
+</dialog>
+
+<dialog id="jwDlg" aria-labelledby="jwTitle">
+  <div>
+    <h2 id="jwTitle">Jewellers</h2>
+    <p class="sub">% each jeweller takes off the market value of your gold when you exchange it. Use a minus number if they pay above market.</p>
+    <div id="jwRows"></div>
+    <p class="warn" id="jwErr" hidden></p>
+    <div class="row">
+      <button type="button" class="chip" id="jwAdd">Add jeweller</button>
+    </div>
+    <div class="actions">
+      <button type="button" class="primary" id="jwClose">Done</button>
     </div>
   </div>
 </dialog>

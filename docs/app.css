@@ -54,7 +54,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .top h1 { font-size: 17px; margin: 0; white-space: nowrap; color: var(--accent); }
 .tabs { display: flex; gap: 4px; margin-left: auto; }
 .tab {
-  border: 0; background: transparent; padding: 8px 10px; border-radius: 999px; cursor: pointer; color: var(--muted); font-weight: 600;
+  border: 0; background: transparent; padding: 8px 10px; border-radius: 999px; cursor: pointer; color: var(--muted); font-weight: 600; white-space: nowrap;
 }
 .tab[aria-pressed="true"] { background: var(--accent-soft); color: var(--text); }
 .count { display: inline-block; min-width: 1.5em; padding: 0 5px; border-radius: 999px; background: var(--accent); color: var(--accent-ink); font-size: 12px; text-align: center; }
@@ -170,6 +170,15 @@ dialog h3 { font-size: 15px; margin: 18px 0 2px; }
 .notes { white-space: pre-wrap; overflow-wrap: anywhere; }
 .duty-row { display: grid; grid-template-columns: minmax(0, 1fr) 76px 46px; gap: 8px; align-items: end; }
 .duty-row button { min-height: 46px; padding: 0; }
+.jw-row { display: grid; grid-template-columns: minmax(0, 1fr) 72px 46px; gap: 8px; align-items: end; }
+.jw-row button { min-height: 46px; padding: 0; }
+#jwAdd { margin-top: 12px; }
+
+/* gold exchange */
+.card-h { font-size: 15px; margin: 0 0 2px; }
+.card-h.small { font-size: 14px; margin: 16px 0 0; color: var(--muted); }
+.top-gap { margin-top: 12px; }
+#xCompare dd b { color: var(--accent); }
 
 .toast {
   position: fixed; left: 50%; bottom: calc(18px + env(safe-area-inset-bottom)); transform: translateX(-50%);
@@ -177,12 +186,13 @@ dialog h3 { font-size: 15px; margin: 18px 0 2px; }
   max-width: calc(100vw - 32px); box-shadow: 0 6px 20px rgba(0, 0, 0, .25);
 }
 
-@media (max-width: 360px) {
-  .top h1 { display: none; }
+@media (max-width: 520px) {
+  .top h1 { display: none; } /* room for the tabs on phones */
 }
 @media (max-width: 380px) {
   .top h1 { font-size: 15px; }
-  .tab { padding: 8px 7px; }
+  .tabs { gap: 0; }
+  .tab { padding: 8px 5px; font-size: 15px; }
   .grid2 { grid-template-columns: 1fr; gap: 0; }
   .headline strong { font-size: 30px; }
 }
@@ -223,6 +233,18 @@ dialog h3 { font-size: 15px; margin: 18px 0 2px; }
   .badge.ok { background: #16321f; }
   .badge.warn { background: #3a2c0a; color: #f1c35a; }
 }
-@media (max-width: 520px) {
+@media (max-width: 600px) {
   body.owner .top h1 { display: none; }
+}
+/* The owner has four tabs: on narrow phones they get their own row under the title. */
+@media (max-width: 460px) {
+  body.owner .top { flex-wrap: wrap; row-gap: 2px; }
+  body.owner .top h1 { display: block; }
+  body.owner .icon { margin-left: auto; }
+  body.owner .tabs { order: 3; flex: 1 0 100%; margin-left: 0; justify-content: space-between; }
+  body.owner .tab { padding: 8px 6px; }
+}
+@media (max-width: 380px) {
+  body.owner .tabs { gap: 0; }
+  body.owner .tab { padding: 8px 4px; font-size: 14px; }
 }
