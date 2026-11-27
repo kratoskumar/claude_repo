@@ -55,6 +55,7 @@ test('A: India rate, INR price including 3% GST, 22K', () => {
   near(r.tax, 75000 - 72815.533981);
   near(r.making, 9881.882782);
   near(r.pct, 15.702065);
+  near(r.pctPrice, 13.5711, 1e-3);
   near(r.perGram, 988.188278);
   near(r.itemRate, 6293.365120);
 });
@@ -65,6 +66,7 @@ test('B: US rate, USD price, 14K, stones subtracted, no tax', () => {
   near(r.gold, 258.438418);
   near(r.making, 350.561582);
   near(r.pct, 135.64608);
+  near(r.pctPrice, 54.0157, 1e-3);
   assert.equal(r.tax, 0);
 });
 
@@ -75,6 +77,7 @@ test('C: US rate, INR price, sales tax included', () => {
   near(r.preTax, 56271.981243);
   near(r.making, 9023.244085);
   near(r.pct, 19.097323);
+  near(r.pctPrice, 16.0351, 1e-3);
 });
 
 test('D: India rate, USD price', () => {

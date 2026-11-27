@@ -207,6 +207,13 @@ export async function deleteItem(uid, id) {
   return { done };
 }
 
+// Re-open the database connection (after an iPhone home-screen app wakes up).
+export async function reconnect() {
+  const { F, db } = await init();
+  await F.disableNetwork(db);
+  await F.enableNetwork(db);
+}
+
 // Owner only: the latest result of the hourly monitor job (1 read).
 export async function monitorStatus() {
   const { F, db } = await init();

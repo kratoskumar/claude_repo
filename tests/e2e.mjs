@@ -104,6 +104,10 @@ try {
     await p.fill('#other', '40');
     await waitText(p, '#mkAmt', '$374.94');
     check(await p.textContent('#mkPct') === '160.2%', 'pct ' + await p.textContent('#mkPct'));
+    check(await p.textContent('#mkPctBox') === '160.2% of gold value', 'prominent % ' + await p.textContent('#mkPctBox'));
+    check(await p.textContent('#mkPctPriceBox') === '57.8% of price', '% of price ' + await p.textContent('#mkPctPriceBox'));
+    check(await p.textContent('#mkGold') === '$234.06', 'gold value tile ' + await p.textContent('#mkGold'));
+    check(await p.textContent('#mkPg') === '$72.10', 'per gram ' + await p.textContent('#mkPg'));
     check((await p.textContent('#mkAlt')).includes('₹31,495'), 'alt ' + await p.textContent('#mkAlt'));
     check(!(await p.isDisabled('#saveBtn')), 'save enabled');
   });
@@ -112,6 +116,7 @@ try {
     await setIndiaItem(p);
     await waitText(p, '#mkAmt', '₹4,538');
     check(await p.textContent('#mkPct') === '6.6%', 'pct');
+    check(await p.textContent('#mkPctPriceBox') === '6.2% of price before GST', '% of price ' + await p.textContent('#mkPctPriceBox'));
     check(await p.isChecked('#taxIncl'), 'GST included by default for India');
     check(await p.inputValue('#r24') === '74,538.29', 'r24 ' + await p.inputValue('#r24'));
     check((await p.textContent('#dutyNote')).includes('15% import duty'), 'duty note');
@@ -352,6 +357,7 @@ try {
     }, 'full photo replaces the thumbnail');
     const facts = await a.textContent('#iFacts');
     check(facts.includes('Import duty used15%') && facts.includes('22K (91.6%)'), 'facts ' + facts);
+    check(facts.includes('Making % of price6.2% (before GST)'), 'detail % of price ' + facts);
   });
 
   await step('edit: open in calculator, change price, photo kept', async () => {
@@ -500,6 +506,20 @@ try {
     await waitText(a, '#adminBody', 'asha@gmail.com');
   });
 
+  await step('dashboard never hangs when the database connection stalls', async () => {
+    await a.click('#tabCalc');
+    let stall = true;
+    await ctxA.route(/127\.0\.0\.1:8080/, r => { if (!stall) return r.continue(); /* never answer */ });
+    await a.click('#tabAdmin');
+    await a.waitForTimeout(16000);
+    const text = await a.textContent('#adminBody');
+    check(!/^Loading dashboard/.test(text.trim()), 'still loading after 16 s: ' + text.slice(0, 80));
+    stall = false;
+    await ctxA.unroute(/127\.0\.0\.1:8080/);
+    if (await a.isVisible('#adminBody >> text=Try again')) await a.click('#adminBody >> text=Try again');
+    await waitText(a, '#adminBody', 'Free plan usage', 30000);
+  });
+
   await step('friend gets access without reloading, saves privately', async () => {
     await waitText(fr, '#savedInfo', '0 of 100 saved', 20000);
     await fr.click('#tabCalc');
@@ -621,6 +641,27 @@ try {
   });
   await ctxS.close();
   sC.close();
+
+  // ======================= E. Old address forwards to the new one =======================
+  {
+    const { server: sE, url: uE } = await serve({ realConfig: true });
+    const ctxE = await browser.newContext({ serviceWorkers: 'block' });
+    await mockRates(ctxE);
+    await ctxE.route('https://kratoskumar.github.io/claude_repo/**', async r => {
+      const path = new URL(r.request().url()).pathname.replace('/claude_repo/', '');
+      const res = await fetch(uE + path);
+      r.fulfill({ status: res.status, headers: { 'content-type': res.headers.get('content-type') || 'text/html' }, body: Buffer.from(await res.arrayBuffer()) });
+    });
+    await ctxE.route('https://making-charge.web.app/**', r => r.fulfill({ status: 200, contentType: 'text/html', body: '<!doctype html><title>new home</title>' }));
+    const e = await ctxE.newPage();
+    await step('old GitHub Pages link forwards to making-charge.web.app (keeping #saved)', async () => {
+      await e.goto('https://kratoskumar.github.io/claude_repo/#saved');
+      await e.waitForURL('https://making-charge.web.app/**', { timeout: 15000 });
+      check(e.url() === 'https://making-charge.web.app/#saved', 'forwarded to ' + e.url());
+    });
+    await ctxE.close();
+    sE.close();
+  }
 
   // ======================= D. Real data sources through the real security policy =======================
   const { server: sD, url: uD } = await serve();

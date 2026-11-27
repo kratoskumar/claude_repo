@@ -7,7 +7,7 @@ if (CANONICAL_HOST && location.hostname !== CANONICAL_HOST && /(\.github\.io|\.f
   location.replace(`https://${CANONICAL_HOST}/${location.hash}`);
 }
 
-const VERSION = '1.1.0';
+const VERSION = '1.1.3';
 const $ = id => document.getElementById(id);
 const today = () => C.localISO();
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -212,6 +212,11 @@ function render() {
     $('mkAlt').textContent = c.fx > 0 ? `≈ ${C.money(C.convert(res.making, cur, alt, c.fx), alt)}` : '';
     $('mkPct').textContent = pctText(res.pct);
     $('mkPg').textContent = C.money(res.perGram, cur);
+    $('mkGold').textContent = C.money(res.gold, cur);
+    $('mkPctBox').classList.remove('empty');
+    $('mkPctPrice').textContent = pctText(res.pctPrice);
+    $('mkPctPriceLabel').textContent = c.tax.incl ? `of price before ${S.market === 'IN' ? 'GST' : 'tax'}` : 'of price';
+    $('mkPctPriceBox').classList.remove('empty');
     const rows = [[`Price${c.tax.incl ? '' : ' (before tax)'}`, C.money(c.price, cur)]];
     if (c.tax.incl) {
       rows.push([`− ${S.market === 'IN' ? 'GST' : 'Sales tax'} ${C.plain(c.taxPct, 3)}%`, C.money(res.tax, cur)]);
@@ -234,6 +239,11 @@ function render() {
     $('mkAlt').textContent = hint(res.err, c);
     $('mkPct').textContent = '—';
     $('mkPg').textContent = '—';
+    $('mkGold').textContent = '—';
+    $('mkPctBox').classList.add('empty');
+    $('mkPctPrice').textContent = '—';
+    $('mkPctPriceLabel').textContent = 'of price';
+    $('mkPctPriceBox').classList.add('empty');
     const msg = problem(res.err, c);
     warn.hidden = !msg;
     warn.textContent = msg || '';
@@ -596,20 +606,40 @@ function listRow(it) {
 }
 
 // ---------- owner dashboard ----------
-let adminMod = null;
-async function openAdmin() {
+let adminMod = null, adminLoading = null;
+// iPhone home-screen apps can leave the database connection asleep after being in the background,
+// so loading gives up after a few seconds and offers "Try again", which also wakes the connection.
+function openAdmin(retry = false) {
+  if (adminLoading) return adminLoading;
   const root = $('adminBody');
-  if (!root.childElementCount) root.textContent = 'Loading dashboard…';
-  try {
-    const m = await cloud();
-    if (!m || !isOwnerUser()) { setView('calc'); return; }
-    adminMod ||= await import('./admin.js');
-    const data = await adminMod.load();
-    adminMod.render(root, data, { toast, refresh: openAdmin, ownerUid: user.uid });
-    setAdminDot(data.requests.length > 0 || ((data.status && data.status.alerts) || []).length > 0);
-  } catch (e) {
-    root.textContent = `Could not load the dashboard (${e.code || e.message}).`;
-  }
+  adminLoading = (async () => {
+    if (!root.childElementCount || retry) root.textContent = 'Loading dashboard…';
+    try {
+      const m = await cloud();
+      if (!m || !isOwnerUser()) { setView('calc'); return; }
+      if (retry) await m.reconnect().catch(() => {});
+      adminMod ||= await import('./admin.js');
+      const data = await Promise.race([
+        adminMod.load(),
+        sleep(12000).then(() => { throw Object.assign(new Error('timeout'), { code: 'timeout' }); })
+      ]);
+      adminMod.render(root, data, { toast, refresh: () => openAdmin(), ownerUid: user.uid });
+      setAdminDot(data.requests.length > 0 || ((data.status && data.status.alerts) || []).length > 0);
+    } catch (e) {
+      root.textContent = '';
+      const p = document.createElement('p');
+      p.className = 'card center';
+      p.textContent = e.code === 'timeout'
+        ? 'The dashboard is taking too long (the connection may still be waking up).'
+        : `Could not load the dashboard (${e.code || e.message}).`;
+      const b = document.createElement('button');
+      b.type = 'button'; b.className = 'btn primary'; b.textContent = 'Try again';
+      b.addEventListener('click', () => openAdmin(true));
+      p.append(document.createElement('br'), b);
+      root.append(p);
+    }
+  })().finally(() => { adminLoading = null; });
+  return adminLoading;
 }
 function setAdminDot(on) { $('adminDot').hidden = !on; }
 async function checkOwnerAlerts() {
@@ -941,6 +971,7 @@ function openItem(it) {
   const m = C.MARKETS[it.market] || C.MARKETS.US;
   const facts = [
     ['Making charge', `${C.money(it.making, it.cur)} (${pctText(it.pct)})`],
+    ['Making % of price', it.preTax > 0 ? `${pctText((it.making / it.preTax) * 100)}${it.taxIncl ? ` (before ${it.market === 'IN' ? 'GST' : 'tax'})` : ''}` : '—'],
     ['Making per gram', C.money(it.perGram, it.cur)],
     ['Price', `${C.money(it.price, it.cur)}${it.taxIncl ? ` incl. ${it.market === 'IN' ? 'GST' : 'tax'} ${C.plain(it.taxPct, 3)}%` : ''}`],
     ['Gold', `${C.plain(it.wt, 3)} g · ${it.k === 'custom' ? `${C.plain(it.pf * 100, 2)}%` : purityLabel(it.market, it.k)}`],
@@ -1105,6 +1136,7 @@ if ('serviceWorker' in navigator) {
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState !== 'visible') { persistNow(); if (cloudMod) cloudMod.flush().catch(() => {}); return; }
   if (!S.date) loadRates(); // refresh "today" (cached for 10 minutes)
+  if (view === 'admin') openAdmin(); // fresh numbers when coming back to the app
 });
 addEventListener('pagehide', persistNow);
 

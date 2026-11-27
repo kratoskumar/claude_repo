@@ -85,6 +85,7 @@ export function making({ price, priceCur, weight, factor, rate24, rateCur, fx, t
     gold,
     making: mk,
     pct: (mk / gold) * 100,
+    pctPrice: (mk / preTax) * 100, // share of the price (before tax)
     perGram: mk / weight,
     pricePerGram: preTax / weight
   };
