@@ -14,11 +14,13 @@ const TYPES = {
 export const emuConfig = (ownerUid = '') => `export const FIREBASE = { apiKey: 'demo-key', authDomain: 'demo-mc.firebaseapp.com', projectId: 'demo-mc', appId: '1:1:web:1' };
 export const OWNER_UID = '${ownerUid}';
 export const CANONICAL_HOST = '';
+export const FORWARD_FROM = [];
 export const EMULATOR = { auth: 'http://127.0.0.1:9099', host: '127.0.0.1', port: 8080 };`;
 
 export const BLANK_CONFIG = `export const FIREBASE = { apiKey: '', authDomain: '', projectId: '', appId: '' };
 export const OWNER_UID = '';
 export const CANONICAL_HOST = '';
+export const FORWARD_FROM = [];
 export const EMULATOR = null;`;
 
 // config: by default the app gets a blank config (never the real Firebase project);

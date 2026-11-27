@@ -1,13 +1,13 @@
 import * as C from './calc.js';
 import { getRates, clearCache } from './rates.js';
-import { CANONICAL_HOST } from './config.js';
+import { CANONICAL_HOST, FORWARD_FROM } from './config.js';
 
-// One address for everyone: the old GitHub Pages link and the firebaseapp.com address move to the main one.
-if (CANONICAL_HOST && location.hostname !== CANONICAL_HOST && /(\.github\.io|\.firebaseapp\.com)$/.test(location.hostname)) {
+// One address for everyone: the app's older addresses move to the main one.
+if (CANONICAL_HOST && location.hostname !== CANONICAL_HOST && (FORWARD_FROM || []).includes(location.hostname)) {
   location.replace(`https://${CANONICAL_HOST}/${location.hash}`);
 }
 
-const VERSION = '1.1.3';
+const VERSION = '1.1.4';
 const $ = id => document.getElementById(id);
 const today = () => C.localISO();
 const sleep = ms => new Promise(r => setTimeout(r, ms));
