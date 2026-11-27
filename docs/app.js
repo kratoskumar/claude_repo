@@ -7,7 +7,7 @@ if (CANONICAL_HOST && location.hostname !== CANONICAL_HOST && /(\.github\.io|\.f
   location.replace(`https://${CANONICAL_HOST}/${location.hash}`);
 }
 
-const VERSION = '1.1.2';
+const VERSION = '1.1.3';
 const $ = id => document.getElementById(id);
 const today = () => C.localISO();
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -214,6 +214,9 @@ function render() {
     $('mkPg').textContent = C.money(res.perGram, cur);
     $('mkGold').textContent = C.money(res.gold, cur);
     $('mkPctBox').classList.remove('empty');
+    $('mkPctPrice').textContent = pctText(res.pctPrice);
+    $('mkPctPriceLabel').textContent = c.tax.incl ? `of price before ${S.market === 'IN' ? 'GST' : 'tax'}` : 'of price';
+    $('mkPctPriceBox').classList.remove('empty');
     const rows = [[`Price${c.tax.incl ? '' : ' (before tax)'}`, C.money(c.price, cur)]];
     if (c.tax.incl) {
       rows.push([`− ${S.market === 'IN' ? 'GST' : 'Sales tax'} ${C.plain(c.taxPct, 3)}%`, C.money(res.tax, cur)]);
@@ -238,6 +241,9 @@ function render() {
     $('mkPg').textContent = '—';
     $('mkGold').textContent = '—';
     $('mkPctBox').classList.add('empty');
+    $('mkPctPrice').textContent = '—';
+    $('mkPctPriceLabel').textContent = 'of price';
+    $('mkPctPriceBox').classList.add('empty');
     const msg = problem(res.err, c);
     warn.hidden = !msg;
     warn.textContent = msg || '';
@@ -965,6 +971,7 @@ function openItem(it) {
   const m = C.MARKETS[it.market] || C.MARKETS.US;
   const facts = [
     ['Making charge', `${C.money(it.making, it.cur)} (${pctText(it.pct)})`],
+    ['Making % of price', it.preTax > 0 ? `${pctText((it.making / it.preTax) * 100)}${it.taxIncl ? ` (before ${it.market === 'IN' ? 'GST' : 'tax'})` : ''}` : '—'],
     ['Making per gram', C.money(it.perGram, it.cur)],
     ['Price', `${C.money(it.price, it.cur)}${it.taxIncl ? ` incl. ${it.market === 'IN' ? 'GST' : 'tax'} ${C.plain(it.taxPct, 3)}%` : ''}`],
     ['Gold', `${C.plain(it.wt, 3)} g · ${it.k === 'custom' ? `${C.plain(it.pf * 100, 2)}%` : purityLabel(it.market, it.k)}`],

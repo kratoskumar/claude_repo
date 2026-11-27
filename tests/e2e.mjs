@@ -105,6 +105,7 @@ try {
     await waitText(p, '#mkAmt', '$374.94');
     check(await p.textContent('#mkPct') === '160.2%', 'pct ' + await p.textContent('#mkPct'));
     check(await p.textContent('#mkPctBox') === '160.2% of gold value', 'prominent % ' + await p.textContent('#mkPctBox'));
+    check(await p.textContent('#mkPctPriceBox') === '57.8% of price', '% of price ' + await p.textContent('#mkPctPriceBox'));
     check(await p.textContent('#mkGold') === '$234.06', 'gold value tile ' + await p.textContent('#mkGold'));
     check(await p.textContent('#mkPg') === '$72.10', 'per gram ' + await p.textContent('#mkPg'));
     check((await p.textContent('#mkAlt')).includes('₹31,495'), 'alt ' + await p.textContent('#mkAlt'));
@@ -115,6 +116,7 @@ try {
     await setIndiaItem(p);
     await waitText(p, '#mkAmt', '₹4,538');
     check(await p.textContent('#mkPct') === '6.6%', 'pct');
+    check(await p.textContent('#mkPctPriceBox') === '6.2% of price before GST', '% of price ' + await p.textContent('#mkPctPriceBox'));
     check(await p.isChecked('#taxIncl'), 'GST included by default for India');
     check(await p.inputValue('#r24') === '74,538.29', 'r24 ' + await p.inputValue('#r24'));
     check((await p.textContent('#dutyNote')).includes('15% import duty'), 'duty note');
@@ -355,6 +357,7 @@ try {
     }, 'full photo replaces the thumbnail');
     const facts = await a.textContent('#iFacts');
     check(facts.includes('Import duty used15%') && facts.includes('22K (91.6%)'), 'facts ' + facts);
+    check(facts.includes('Making % of price6.2% (before GST)'), 'detail % of price ' + facts);
   });
 
   await step('edit: open in calculator, change price, photo kept', async () => {

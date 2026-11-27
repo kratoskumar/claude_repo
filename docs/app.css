@@ -113,7 +113,10 @@ input.tiny { width: 84px !important; margin: 0 !important; text-align: right; }
   background: var(--accent); color: var(--accent-ink); font-size: 14px; font-weight: 600; }
 .pct-pill b { font-size: 24px; font-variant-numeric: tabular-nums; }
 .headline .pct-pill span { color: inherit; font-size: 14px; }
-.pct-pill.empty { background: var(--accent-soft); color: var(--muted); }
+.pills { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 10px; }
+.pills .pct-pill { margin: 0; }
+.pct-pill.alt { background: transparent; color: var(--accent); box-shadow: inset 0 0 0 2px var(--accent); }
+.pct-pill.empty { background: var(--accent-soft); color: var(--muted); box-shadow: none; }
 .kpis { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 12px; }
 .kpis div { background: var(--accent-soft); border-radius: 12px; padding: 10px; text-align: center; }
 .kpis b { display: block; font-size: 20px; font-variant-numeric: tabular-nums; }
