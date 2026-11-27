@@ -1,5 +1,7 @@
-# Hourly health check: compares usage with the free-plan limits and opens a GitHub issue
-# (phone notification + email) when something needs attention. Closes it when resolved.
+# Hourly health check: compares usage with the free-plan limits, checks the app's certificate and
+# domain expiry, opens a GitHub issue and sends a phone push (ntfy) when something needs attention,
+# and pings a dead-man's switch (healthchecks.io) that alerts if these runs stop.
+# The repo is public: the ntfy topic and the ping address are secrets, and the logs carry no names or IDs.
 name: Monitor
 
 on:
@@ -30,4 +32,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
           OWNER_LOGIN: ${{ github.repository_owner }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          NTFY_TOKEN: ${{ secrets.NTFY_TOKEN }}
+          HEALTHCHECK_URL: ${{ secrets.HEALTHCHECK_URL }}
         run: node scripts/monitor.mjs

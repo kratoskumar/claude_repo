@@ -1,9 +1,12 @@
 // Hourly health check for the Making Charge Calculator (run by .github/workflows/monitor.yml).
 // Reads usage (exact numbers from Google Cloud Monitoring when available, otherwise the app's own
 // counters), compares it with the Firebase free-plan limits, saves a summary for the owner's
-// dashboard, opens/updates/closes GitHub issues as alerts, deletes data of removed members on
-// request, and keeps the schedule alive. Uses only Node's built-ins.
+// dashboard, opens/updates/closes GitHub issues as alerts, pushes changes to the owner's phone (ntfy),
+// checks the certificate and domain expiry, reports to a dead-man's switch (healthchecks.io),
+// deletes data of removed members on request, and keeps the schedule alive. Uses only Node's built-ins.
+// The repository is public: logs and issues must never carry names, emails or user IDs.
 import { createSign } from 'node:crypto';
+import { connect } from 'node:tls';
 
 export const FREE = { reads: 50000, writes: 20000, deletes: 20000, storageMB: 1024, egressMB: 10240 };
 const env = process.env;
@@ -18,7 +21,14 @@ export function pacificMidnight(day) {
   }
   return new Date(`${day}T08:00:00Z`);
 }
+const DAY_MS = 86400000;
+const sleep = ms => new Promise(r => setTimeout(r, ms));
 const addDay = (day, n) => { const d = new Date(`${day}T12:00:00Z`); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+
+// ---------- privacy: the repo is public, so logs, issues and pushes must not carry names or IDs ----------
+export const scrub = msg => String(msg ?? '')
+  .replace(/\b(users|members|requests|purge|active)\/[^/\s:?"']+/g, '$1/*')
+  .replace(/[\w.+-]+@[\w-]+(\.[\w-]+)+/g, '[email]');
 
 // ---------- Google auth (service account -> access token) ----------
 async function googleToken(sa) {
@@ -160,14 +170,134 @@ export function evaluate(u) {
   if (u.maxMembers && u.members >= Math.ceil(u.maxMembers * 0.9)) {
     add('members', 'warn', `${u.members} of ${u.maxMembers} member places are used. Raise the limit in Admin or remove inactive people.`);
   }
-  if (u.pending > 0) add('requests', 'info', `${u.pending} ${u.pending === 1 ? 'person is' : 'people are'} waiting for approval: ${u.pendingNames.join(', ')}. Approve or decline them in the app's Admin tab.`);
+  if (u.pending > 0) add('requests', 'info', `${u.pending} ${u.pending === 1 ? 'person is' : 'people are'} waiting for approval. Approve or decline them in the app's Admin tab.`);
   if (u.errQuota > 0) add('quota', 'crit', `The free daily limit was hit ${u.errQuota} time(s) today: saved items stop loading or saving until midnight Pacific time.`);
   if (u.errSave >= 5) add('saves', 'warn', `${u.errSave} saves failed today.`);
   if (u.errRates >= 20) add('rates', 'warn', `The gold-rate sources failed ${u.errRates} times today; people may need to type rates by hand.`);
   if (u.errOther >= 20) add('errors', 'warn', `${u.errOther} other app errors today.`);
   if (u.activeNow >= 15) add('busy', 'info', `${u.activeNow} people were active in the last 30 minutes. Watch today's reads.`);
   if (u.atLimit > 0) add('itemcap', 'info', `${u.atLimit} ${u.atLimit === 1 ? 'person has' : 'people have'} reached the saved-item limit (${u.itemLimit}).`);
+
+  // Address checks (see siteChecks): the app answering over HTTPS, its certificate, and the domain's registration.
+  const s = u.site;
+  const when = t => new Date(t).toISOString().slice(0, 10);
+  if (s && s.unreachable) {
+    add('site', 'warn', `App unreachable: ${s.host} did not answer over HTTPS twice in a row (${s.unreachable}). If this repeats next hour, the app is probably down for everyone.`);
+  } else if (s && s.certError) {
+    add('cert', 'crit', `Certificate problem: browsers will warn people away from ${s.host} (${s.certError}). Check Firebase console → Hosting → the custom domain.`);
+  } else if (s && s.certDays != null) {
+    add('cert', s.certDays <= 5 ? 'crit' : s.certDays <= 14 ? 'warn' : null,
+      `Certificate expiring: the certificate for ${s.host} expires in ${Math.max(0, Math.floor(s.certDays))} days (${when(s.certExpires)}). Firebase renews it automatically, well before this; check Firebase console → Hosting → the custom domain.`);
+  }
+  if (s && s.domainDays != null) {
+    add('domain', s.domainDays <= 7 ? 'crit' : s.domainDays <= 30 ? 'warn' : null,
+      `Domain expiring: ${s.domain} expires in ${Math.max(0, Math.floor(s.domainDays))} days (${when(s.domainExpires)}). Renew it at GoDaddy. If auto-renew is on, check that the card on file is valid. If it lapses, the app's address stops working.`);
+  }
   return alerts;
+}
+
+// ---------- address checks: HTTPS answer, certificate, domain registration ----------
+// Reads the certificate the app's address presents. Never sends data; only the TLS handshake.
+export function certCheck(host, { port = 443, ca, timeout = 10000 } = {}) {
+  return new Promise(resolve => {
+    const sock = connect({ host, port, servername: host, ca, rejectUnauthorized: false, timeout }, () => {
+      const c = sock.getPeerCertificate();
+      resolve({ authorized: sock.authorized, error: sock.authorized ? null : String(sock.authorizationError), expires: c && c.valid_to ? Date.parse(c.valid_to) : null });
+      sock.end();
+    });
+    sock.on('timeout', () => { sock.destroy(); resolve({ unreachable: 'no answer' }); });
+    sock.on('error', e => resolve({ unreachable: e.code || 'connection failed' }));
+  });
+}
+
+// The registered domain behind the app's address, or null for addresses the provider owns.
+export function registeredDomain(host) {
+  if (!host || /(^|\.)(web\.app|firebaseapp\.com|github\.io)$/.test(host)) return null;
+  return host.split('.').slice(-2).join('.');
+}
+
+// Domain expiry date from the public registration directory (RDAP). Returns a timestamp or null.
+export async function domainExpiry(domain) {
+  const r = await fetch(`${env.RDAP_URL || 'https://rdap.org'}/domain/${domain}`, { headers: { accept: 'application/rdap+json' }, signal: AbortSignal.timeout(15000) });
+  if (!r.ok) throw new Error(`registration lookup answered ${r.status}`);
+  const j = await r.json();
+  const e = (j.events || []).find(x => x.eventAction === 'expiration');
+  return e ? Date.parse(e.eventDate) : null;
+}
+
+export async function siteChecks(host, now = Date.now()) {
+  const opts = { port: env.CHECK_PORT ? +env.CHECK_PORT : 443, ca: env.CHECK_CA || undefined };
+  const out = { host };
+  let tls = await certCheck(host, opts);
+  if (tls.unreachable) { await sleep(env.CHECK_RETRY_MS ? +env.CHECK_RETRY_MS : 5000); tls = await certCheck(host, opts); }
+  if (tls.unreachable) out.unreachable = tls.unreachable;
+  else if (!tls.authorized) out.certError = tls.error;
+  else if (tls.expires) { out.certExpires = tls.expires; out.certDays = (tls.expires - now) / DAY_MS; }
+  const domain = env.CHECK_DOMAIN || registeredDomain(host);
+  if (domain) {
+    out.domain = domain;
+    try {
+      const t = await domainExpiry(domain);
+      if (t) { out.domainExpires = t; out.domainDays = (t - now) / DAY_MS; }
+    } catch (e) { out.domainNote = scrub(e.message); }
+  }
+  return out;
+}
+
+// ---------- phone push (ntfy) ----------
+// What changed since the last run: new alerts, alerts that got worse, and warnings/urgent alerts that cleared.
+export function changes(prevAlerts, alerts) {
+  const before = Object.fromEntries((prevAlerts || []).map(a => [a.key, a]));
+  const active = new Set(alerts.map(a => a.key));
+  const out = [];
+  for (const a of alerts) {
+    const p = before[a.key];
+    if (!p) out.push({ kind: 'new', ...a });
+    else if (ORDER[a.level] > (ORDER[p.level] || 0)) out.push({ kind: 'worse', ...a });
+  }
+  for (const p of prevAlerts || []) if (!active.has(p.key) && p.level !== 'info') out.push({ kind: 'resolved', ...p });
+  return out;
+}
+
+const heading = text => String(text).split(':')[0];
+export function pushMessage(list, link) {
+  const top = Math.max(0, ...list.filter(c => c.kind !== 'resolved').map(c => ORDER[c.level]));
+  const one = list.length === 1 ? list[0] : null;
+  const title = one
+    ? (one.kind === 'resolved' ? `MCC back to normal: ${heading(one.text)}` : `MCC ${TITLE[one.level]}: ${heading(one.text)}`)
+    : `MCC: ${list.length} updates`;
+  const line = c => (c.kind === 'resolved' ? `Back to normal: ${heading(c.text)}.` : `${c.kind === 'worse' ? 'Now ' : ''}${TITLE[c.level]}: ${c.text}`);
+  return {
+    title: title.replace(/[^\x20-\x7E]/g, '').slice(0, 120),
+    priority: [2, 3, 4, 5][top],
+    tags: ['white_check_mark', 'information_source', 'warning', 'rotating_light'][top],
+    body: scrub(list.map(line).join('\n\n')),
+    click: link
+  };
+}
+
+export async function push(list, link) {
+  if (!env.NTFY_TOPIC || !list.length) return null;
+  const m = pushMessage(list, link);
+  const headers = { title: m.title, priority: String(m.priority), tags: m.tags };
+  if (m.click) headers.click = m.click;
+  if (env.NTFY_TOKEN) headers.authorization = `Bearer ${env.NTFY_TOKEN}`;
+  const r = await fetch(`${(env.NTFY_SERVER || 'https://ntfy.sh').replace(/\/+$/, '')}/${encodeURIComponent(env.NTFY_TOPIC)}`, {
+    method: 'POST', headers, body: m.body, signal: AbortSignal.timeout(15000)
+  });
+  if (!r.ok) throw new Error(`push service answered ${r.status}`);
+  return `pushed ${list.length}`;
+}
+
+// ---------- dead-man's switch (healthchecks.io) ----------
+// A success ping every run; a /fail ping when the run breaks. healthchecks.io alerts when pings stop.
+export async function ping(ok, body) {
+  if (!env.HEALTHCHECK_URL) return null;
+  const r = await fetch(`${env.HEALTHCHECK_URL.replace(/\/+$/, '')}${ok ? '' : '/fail'}`, {
+    method: 'POST', body: scrub(body).slice(0, 10000), signal: AbortSignal.timeout(10000)
+  });
+  if (!r.ok) throw new Error(`dead-man's switch answered ${r.status}`);
+  return ok ? 'pinged' : 'pinged fail';
 }
 
 // ---------- GitHub issues as alerts (phone notification + email) ----------
@@ -215,7 +345,7 @@ export async function syncIssues(alerts, extra = {}) {
   }
   const active = new Set(alerts.map(a => a.key));
   for (const [key, ex] of Object.entries(byKey)) {
-    if (active.has(key) || (extra.keep && extra.keep.includes(key))) continue;
+    if (active.has(key) || (extra.only && !extra.only.includes(key))) continue;
     await gh('POST', `/repos/${repo}/issues/${ex.number}/comments`, { body: 'Resolved: this is back to normal.\n\n---\n_Generated by the app\'s monitor_' });
     await gh('PATCH', `/repos/${repo}/issues/${ex.number}`, { state: 'closed', state_reason: 'completed' });
     actions.push(`closed ${key}`);
@@ -291,35 +421,45 @@ export async function run() {
     storageMB: google ? google.storageMB : null,
     egressMonthMB, dayOfMonth: +day.slice(8, 10), daysInMonth: dim,
     members: members + 1, maxMembers: limits.maxMembers, itemLimit: limits.itemLimit, atLimit,
-    pending: pendingList.length, pendingNames: pendingList.map(r => r.name || r.email || 'someone').slice(0, 10),
+    pending: pendingList.length,
     activeToday, activeNow,
-    errQuota: st.errQuota || 0, errSave: st.errSave || 0, errRates: st.errRates || 0, errOther: st.errOther || 0
+    errQuota: st.errQuota || 0, errSave: st.errSave || 0, errRates: st.errRates || 0, errOther: st.errOther || 0,
+    site: env.SITE_CHECKS === 'off' ? null : await siteChecks(env.CHECK_HOST || config.CANONICAL_HOST, now)
   };
   const alerts = evaluate(u);
 
-  let actions = [];
+  // Each channel is independent: one failing must not stop the others or the saved status.
+  const actions = [];
   if (env.GITHUB_TOKEN && env.REPO) {
-    actions = await syncIssues(alerts);
-    const hb = await heartbeat().catch(e => `heartbeat failed: ${e.message}`);
+    try { actions.push(...await syncIssues(alerts)); } catch (e) { actions.push(`GitHub issues failed: ${scrub(e.message)}`); }
+    const hb = await heartbeat().catch(e => `heartbeat failed: ${scrub(e.message)}`);
     if (hb) actions.push(hb);
   }
+  const pushed = await push(changes(prev && prev.alerts, alerts), `https://${config.CANONICAL_HOST}/#admin`).catch(e => `push failed: ${scrub(e.message)}`);
+  if (pushed) actions.push(pushed);
 
-  const { pendingNames, dayOfMonth, daysInMonth, ...usage } = u;
+  const { dayOfMonth, daysInMonth, ...usage } = u;
   await db.set('monitor/status', {
     ts: Date.now(), ok: !alerts.some(a => a.level !== 'info'), note, google: googleState, usage,
     alerts: alerts.map(({ key, level, text }) => ({ key, level, text })),
     monthKB: { month, days: kb }
   });
-  console.log(JSON.stringify({ usage, note, alerts: alerts.map(a => `${a.level}:${a.key}`), purged, actions }, null, 1));
+  const summary = { usage, note, alerts: alerts.map(a => `${a.level}:${a.key}`), purged: purged.length, actions };
+  const pinged = await ping(true, JSON.stringify({ alerts: summary.alerts, actions })).catch(e => `ping failed: ${scrub(e.message)}`);
+  if (pinged) actions.push(pinged);
+  console.log(JSON.stringify(summary, null, 1));
   return { usage, alerts, purged, actions };
 }
 
 if (process.argv[1] && import.meta.url === new URL(process.argv[1], 'file://').href) {
   run().catch(async e => {
-    console.error('Monitor failed:', e.message);
-    // Tell the owner the monitor itself is broken (then fail the run).
+    const msg = scrub(e.message).slice(0, 300);
+    console.error('Monitor failed:', msg);
+    // Tell the owner the monitor itself is broken (then fail the run). healthchecks.io sends the push
+    // for this once per incident, so it doesn't repeat every hour while the problem lasts.
+    await ping(false, `The hourly monitor could not run: ${msg}`).catch(() => {});
     if (env.GITHUB_TOKEN && env.REPO) {
-      await syncIssues([{ key: 'monitor', level: 'warn', text: `The hourly monitor could not run: ${String(e.message).slice(0, 300)}` }], { keep: ['reads', 'writes', 'deletes', 'storage', 'egress', 'members', 'requests', 'quota', 'saves', 'rates', 'errors', 'busy', 'itemcap'] }).catch(() => {});
+      await syncIssues([{ key: 'monitor', level: 'warn', text: `The hourly monitor could not run: ${msg}` }], { only: ['monitor'] }).catch(() => {});
     }
     process.exit(1);
   });

@@ -85,9 +85,11 @@ With these, 25 active people fit comfortably. Downloads (viewing many photos) ar
   - members, with their item counts, last-seen time, and a Remove button that can also delete their data;
   - limits.
 - **Hourly monitor** (`.github/workflows/monitor.yml`):
-  - checks everything above;
+  - checks everything above, plus the app's address from outside (does it answer over HTTPS, is the certificate valid, when do the certificate and the domain expire);
+  - sends a **phone push** through [ntfy](https://ntfy.sh) when an alert appears, gets worse or clears (never for unchanged alerts);
   - opens a **GitHub issue** that mentions the owner, so it arrives as a GitHub app notification and an email;
-  - comments again only when an alert gets worse, and closes the issue when it clears.
+  - comments again only when an alert gets worse, and closes the issue when it clears;
+  - pings a **dead-man's switch** at [healthchecks.io](https://healthchecks.io) after every run. If the pings stop (GitHub down, schedule paused, a broken secret), healthchecks.io alerts the owner. The monitor itself can't do that.
 - **What it watches for:**
   - 70% (warning) and 90% (urgent) of any daily or monthly limit;
   - downloads on pace to run out;
@@ -97,8 +99,29 @@ With these, 25 active people fit comfortably. Downloads (viewing many photos) ar
   - new access requests;
   - many people active at once;
   - members at their item limit;
+  - the app not answering over HTTPS (twice in a row), or a certificate problem;
+  - the certificate expiring within 14 days (urgent at 5), or the domain within 30 days (urgent at 7);
   - the monitor itself failing.
+- **Not watched:** Hosting's 360 MB/day transfer. Google reports it only with billing turned on. The app is about 25 KB compressed, so it would take thousands of fresh visits a day to reach it.
+- **The repository is public**, so the monitor's logs, issues and pushes carry counts only: no names, emails or user IDs.
 - The monitor makes a tiny commit only if the repo has had no activity for 40 days. GitHub pauses scheduled jobs after 60 inactive days.
+
+### Phone push and dead-man's switch (one-time setup)
+
+Both are optional. The monitor skips each one until its secret exists. Add the secrets under
+GitHub → Settings → Secrets and variables → Actions:
+
+| Secret | What it is |
+| --- | --- |
+| `NTFY_TOPIC` | A long random topic name, for example 32 letters and digits. Anyone who knows it can read and send pushes on it, so keep it only here and in the ntfy app. |
+| `NTFY_TOKEN` | Optional: an ntfy access token, if you later reserve the topic with an ntfy account. |
+| `HEALTHCHECK_URL` | The ping address of a healthchecks.io check (`https://hc-ping.com/…`), with period 1 hour and grace 1 hour. |
+
+1. Install the ntfy app (iPhone or Android) and subscribe to the topic on `ntfy.sh`.
+2. Create a free healthchecks.io account and a check with period 1 hour and grace 1 hour. Under Integrations, add email and ntfy (same topic), so a silent monitor reaches the phone too.
+3. Run **Actions → Monitor → Run workflow** once. You should see the check turn green on healthchecks.io.
+
+Pushes carry only status and counts. They are not end-to-end encrypted, and the alerts never include names.
 
 ## One-time setup
 
@@ -149,9 +172,9 @@ Requires Node 20+, Java 21 (Firebase emulator) and Playwright with Chromium.
 
 ```bash
 npm install
-npm run test:unit        # calculations, number parsing, rates (live + failures), monitor alert rules
+npm run test:unit        # calculations, number parsing, rates (live + failures), monitor alert rules, push, certificate check
 npm run test:rules       # database security rules (owner, members, requests, item cap, privacy)
-npm run test:monitor     # hourly monitor against the emulator with fake Google/GitHub services
+npm run test:monitor     # hourly monitor against the emulator with fake Google/GitHub/ntfy/healthchecks services
 npm run test:components  # photo shrinking, cloud saving, approval flow, dashboard in a real browser
 npm run test:e2e         # 35 end-to-end steps on phone screens, including Google sign-in (emulator)
 npm run serve            # local copy at http://127.0.0.1:8000/claude_repo/

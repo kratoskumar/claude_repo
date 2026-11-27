@@ -1,8 +1,11 @@
-// Monitor job against the Firestore emulator, with fake Cloud Monitoring and GitHub servers.
+// Monitor job against the Firestore emulator, with fake Cloud Monitoring, GitHub, ntfy, healthchecks.io
+// and domain-registration servers, and a local HTTPS address for the certificate check.
 // Run with: npm run test:monitor
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
+import { spawn } from 'node:child_process';
+import { makeCert, tlsServer } from './tls.mjs';
 
 const FS = 'http://127.0.0.1:8080/v1/projects/demo-mc/databases/(default)/documents';
 const H = { authorization: 'Bearer owner', 'content-type': 'application/json' };
@@ -10,8 +13,12 @@ const enc = v => (typeof v === 'string' ? { stringValue: v } : Number.isInteger(
 const put = (path, data) => fetch(`${FS}/${path}`, { method: 'PATCH', headers: H, body: JSON.stringify({ fields: Object.fromEntries(Object.entries(data).map(([k, v]) => [k, enc(v)])) }) });
 const get = async path => { const r = await fetch(`${FS}/${path}`, { headers: H }); return r.status === 404 ? null : r.json(); };
 
-let mon, gh;
+let mon, gh, ext, site;
 const ghIssues = [];
+const pushes = [];
+const pings = [];
+let domainExpires = Date.now() + 400 * 864e5;
+const cert = makeCert(90);
 let googleReads = 46000;
 let googleBilling = false;
 before(async () => {
@@ -34,14 +41,26 @@ before(async () => {
       res.end('{}');
     });
   }).listen(0);
+  ext = http.createServer((req, res) => {
+    let b = ''; req.on('data', c => (b += c)); req.on('end', () => {
+      if (req.url.startsWith('/rdap/domain/')) return res.end(JSON.stringify({ events: [{ eventAction: 'expiration', eventDate: new Date(domainExpires).toISOString() }] }));
+      if (req.url.startsWith('/ntfy/')) pushes.push({ topic: req.url.slice(6), title: req.headers.title, priority: req.headers.priority, body: b });
+      if (req.url.startsWith('/hc/')) pings.push({ path: req.url, body: b });
+      res.end('{}');
+    });
+  }).listen(0);
+  site = await tlsServer(cert);
   await new Promise(r => setTimeout(r, 100));
+  const extUrl = `http://127.0.0.1:${ext.address().port}`;
   Object.assign(process.env, {
+    NTFY_SERVER: `${extUrl}/ntfy`, NTFY_TOPIC: 'secret-topic', HEALTHCHECK_URL: `${extUrl}/hc/check-1`, RDAP_URL: `${extUrl}/rdap`,
+    CHECK_HOST: 'localhost', CHECK_PORT: String(site.address().port), CHECK_CA: cert.cert, CHECK_DOMAIN: 'example.com', CHECK_RETRY_MS: '10',
     PROJECT_ID: 'demo-mc', TOKEN_OVERRIDE: 'owner', FIRESTORE_URL: 'http://127.0.0.1:8080/v1',
     MONITORING_URL: `http://127.0.0.1:${mon.address().port}/v3`, GITHUB_API: `http://127.0.0.1:${gh.address().port}`,
     GITHUB_TOKEN: 't', REPO: 'o/r', OWNER_LOGIN: 'owner'
   });
 });
-after(() => { mon.close(); gh.close(); });
+after(() => { mon.close(); gh.close(); ext.close(); site.close(); });
 
 test('hourly run: usage summary, alerts as issues, purge of removed members', async () => {
   const { pacificDay, run } = await import('../scripts/monitor.mjs');
@@ -80,6 +99,16 @@ test('hourly run: usage summary, alerts as issues, purge of removed members', as
   assert.equal(status.fields.usage.mapValue.fields.reads.integerValue, '46000');
   assert.equal(status.fields.alerts.arrayValue.values.length, 4);
   assert.equal(ghIssues.filter(i => i.state === 'open').length, 4);
+  assert.ok(!JSON.stringify(ghIssues).includes('Ravi'), 'no names in public issues');
+
+  // Address checks ran and were saved; nothing to report while far from expiry.
+  assert.ok(out.usage.site.certDays > 89 && out.usage.site.certDays <= 90);
+  assert.ok(out.usage.site.domainDays > 399);
+  // One phone push for the four new alerts, at the urgency of the worst; one success ping.
+  assert.equal(pushes.length, 1);
+  assert.deepEqual([pushes[0].topic, pushes[0].title, pushes[0].priority], ['secret-topic', 'MCC: 4 updates', '5']);
+  assert.ok(!pushes[0].body.includes('Ravi'));
+  assert.deepEqual(pings.map(p => p.path), ['/hc/check-1']);
 
   // Next hour: reads back to normal, request handled -> those issues close; Google API down -> app estimates.
   googleReads = 100;
@@ -87,6 +116,9 @@ test('hourly run: usage summary, alerts as issues, purge of removed members', as
   const out2 = await run();
   assert.deepEqual(out2.alerts.map(a => a.key).sort(), ['itemcap', 'quota']);
   assert.equal(ghIssues.filter(i => i.state === 'open').length, 2);
+  // Reads back to normal is news; a handled access request is not.
+  assert.equal(pushes.length, 2);
+  assert.equal(pushes[1].title, 'MCC back to normal: Database reads today');
 
   process.env.MONITORING_URL = 'http://127.0.0.1:1/v3';
   const out3 = await run();
@@ -112,6 +144,39 @@ test('hourly run: usage summary, alerts as issues, purge of removed members', as
   const s5 = await get('monitor/status');
   assert.equal(s5.fields.google.stringValue, 'ok');
   assert.equal(s5.fields.note.stringValue, '');
+  assert.equal(pushes.length, 2, 'unchanged alerts stay quiet for hours');
+  assert.equal(pings.length, 5, 'a ping every run');
+});
+
+test('domain about to lapse: alert, push and issue; GitHub failing does not silence the push', async () => {
+  const { run } = await import('../scripts/monitor.mjs');
+  domainExpires = Date.now() + 20.5 * 864e5;
+  const ghApi = process.env.GITHUB_API;
+  process.env.GITHUB_API = 'http://127.0.0.1:1';
+  try {
+    const before = pushes.length;
+    const out = await run();
+    assert.ok(out.alerts.some(a => a.key === 'domain' && a.level === 'warn'));
+    assert.ok(out.actions.some(a => a.startsWith('GitHub issues failed')));
+    assert.equal(pushes.length, before + 1);
+    assert.equal(pushes.at(-1).title, 'MCC Warning: Domain expiring');
+    assert.match(pushes.at(-1).body, /example\.com expires in 20 days/);
+  } finally {
+    process.env.GITHUB_API = ghApi;
+    domainExpires = Date.now() + 400 * 864e5;
+  }
+});
+
+test('monitor that cannot run: fail ping and a GitHub issue, then a failed job', async () => {
+  const before = pings.length;
+  const code = await new Promise(resolve => {
+    const child = spawn(process.execPath, ['scripts/monitor.mjs'], { env: { ...process.env, FIRESTORE_URL: 'http://127.0.0.1:1/v1' }, stdio: 'ignore' });
+    child.on('exit', resolve);
+  });
+  assert.equal(code, 1);
+  assert.deepEqual(pings.slice(before).map(p => p.path), ['/hc/check-1/fail']);
+  assert.match(pings.at(-1).body, /^The hourly monitor could not run: /);
+  assert.ok(ghIssues.some(i => i.state === 'open' && /app-alert:monitor/.test(i.body)));
 });
 
 test('skips quietly when not set up', async () => {
