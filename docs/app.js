@@ -7,7 +7,7 @@ if (CANONICAL_HOST && location.hostname !== CANONICAL_HOST && (FORWARD_FROM || [
   location.replace(`https://${CANONICAL_HOST}/${location.hash}`);
 }
 
-const VERSION = '1.1.4';
+const VERSION = '1.1.5';
 const $ = id => document.getElementById(id);
 const today = () => C.localISO();
 const sleep = ms => new Promise(r => setTimeout(r, ms));

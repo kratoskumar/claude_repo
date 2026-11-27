@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { evaluate, pacificMidnight, pacificDay, syncIssues, FREE } from '../scripts/monitor.mjs';
+import { evaluate, pacificMidnight, pacificDay, syncIssues, googleProblem, FREE } from '../scripts/monitor.mjs';
 
 const base = {
   reads: 0, writes: 0, deletes: 0, storageMB: 10, egressMonthMB: 10, dayOfMonth: 10, daysInMonth: 30,
@@ -79,4 +79,14 @@ test('GitHub issues: open, keep quiet, escalate, close', async () => {
   } finally {
     globalThis.fetch = realFetch;
   }
+});
+
+test('Google refusing for lack of billing gets a plain note; other failures keep their detail', () => {
+  const billing = googleProblem('Monitoring 403 This API method requires billing to be enabled. Please enable billing on project #1 by visiting https://console.developers.google.com/billing/enable?project=1 then retry.');
+  assert.equal(billing.state, 'needs-billing');
+  assert.equal(billing.note, "Using the app's own estimates (exact Google numbers need billing turned on)");
+  const other = googleProblem('Monitoring 403 Permission monitoring.timeSeries.list denied');
+  assert.equal(other.state, 'error');
+  assert.match(other.note, /Permission monitoring\.timeSeries\.list denied.*using the app's estimates/);
+  assert.equal(googleProblem(undefined).state, 'error');
 });

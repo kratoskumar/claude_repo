@@ -66,11 +66,17 @@ export function usage(data) {
   };
 }
 
-function meter(label, value, limit, unit, note) {
+// True when Google withholds its exact numbers because the project has no billing (free Spark plan).
+// Also recognises the raw error text older alert-job runs stored, before the `google` field existed.
+export function needsBilling(st) {
+  return !!st && (st.google === 'needs-billing' || (!st.google && /billing/i.test(String(st.note || ''))));
+}
+
+function meter(label, value, limit, unit, note, missing = 'not available yet') {
   const box = el('div', 'meter');
   const pct = Number.isFinite(value) && limit ? Math.min(100, (value / limit) * 100) : null;
   const head = el('div', 'meter-head');
-  head.append(el('span', null, label), el('b', null, pct == null ? 'not available yet' : `${fmtN(value)} / ${fmtN(limit)}${unit ? ' ' + unit : ''} · ${pct.toFixed(0)}%`));
+  head.append(el('span', null, label), el('b', null, pct == null ? missing : `${fmtN(value)} / ${fmtN(limit)}${unit ? ' ' + unit : ''} · ${pct.toFixed(0)}%`));
   const bar = el('div', 'bar');
   const fill = el('i', `fill ${pct == null ? '' : level(pct)}`);
   fill.style.width = `${pct || 0}%`;
@@ -96,7 +102,9 @@ export function render(root, data, ctx) {
   status.append(badge);
   if (stale) status.append(el('p', 'warn', st ? `The hourly alert job last ran ${ago(st.ts)}. Check GitHub → Actions → Monitor.` : 'The hourly alert job has not run yet (it needs the one-time GitHub setup).'));
   for (const a of alerts) status.append(el('p', `alert ${a.level}`, a.text));
-  if (st && st.ts) status.append(el('p', 'sub', `Alert job last ran ${ago(st.ts)}${st.note ? ` · ${st.note}` : ''}`));
+  const billing = needsBilling(st);
+  const note = billing ? "Using the app's own estimates (exact Google numbers need billing turned on)" : st && st.note;
+  if (st && st.ts) status.append(el('p', 'sub', `Alert job last ran ${ago(st.ts)}${note ? ` · ${note}` : ''}`));
 
   // Usage
   const use = el('div', 'card');
@@ -105,7 +113,9 @@ export function render(root, data, ctx) {
     meter('Database reads', u.reads, FREE.reads, '', 'Opening saved lists and photos.'),
     meter('Database writes', u.writes, FREE.writes, '', 'Saving, settings and usage numbers.'),
     meter('Database deletes', u.deletes, FREE.deletes, ''),
-    meter('Storage used', u.storageMB, FREE.storageMB, 'MB', 'All saved items and photos (from Google, updated by the alert job).'),
+    u.storageMB == null && billing
+      ? meter('Storage used', null, FREE.storageMB, 'MB', 'All saved items and photos. Google only shares this number when billing is turned on (Blaze plan).', 'needs billing to show')
+      : meter('Storage used', u.storageMB, FREE.storageMB, 'MB', 'All saved items and photos (from Google, updated by the alert job).'),
     meter('Downloads this month', u.egressMB, FREE.egressMB, 'MB', 'Estimated from the app; the tightest free limit when people view many photos.')
   );
 

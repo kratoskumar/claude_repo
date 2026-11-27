@@ -100,6 +100,13 @@ function firestore(project, token) {
 const fieldIs = (field, op, value) => ({ fieldFilter: { field: { fieldPath: field }, op, value: encode(value) } });
 
 // ---------- Cloud Monitoring (exact usage; optional) ----------
+// Why Google's exact numbers are missing, in words the Admin page can show as they are.
+// On the free Spark plan Google refuses with "requires billing to be enabled"; that is expected, not a fault.
+export function googleProblem(message) {
+  const m = String(message || '');
+  if (/billing/i.test(m)) return { state: 'needs-billing', note: "Using the app's own estimates (exact Google numbers need billing turned on)" };
+  return { state: 'error', note: `exact Google numbers unavailable (${m.slice(0, 120)}); using the app's estimates` };
+}
 async function monitoring(project, token, day) {
   const base = `${env.MONITORING_URL || 'https://monitoring.googleapis.com/v3'}/projects/${project}/timeSeries`;
   const end = new Date();
@@ -272,8 +279,8 @@ export async function run() {
   if (yesterday.startsWith(month)) kb[yesterday] = (statsYesterday && statsYesterday.kb) || kb[yesterday] || 0;
   const egressMonthMB = Object.values(kb).reduce((a, b) => a + b, 0) / 1024;
 
-  let google = null, note = '';
-  try { google = await monitoring(project, token, day); } catch (e) { note = `exact Google numbers unavailable (${String(e.message).slice(0, 120)}); using the app's estimates`; }
+  let google = null, note = '', googleState = 'ok';
+  try { google = await monitoring(project, token, day); } catch (e) { ({ state: googleState, note } = googleProblem(e.message)); }
 
   const dim = new Date(Date.UTC(+day.slice(0, 4), +day.slice(5, 7), 0)).getUTCDate();
   const u = {
@@ -299,7 +306,7 @@ export async function run() {
 
   const { pendingNames, dayOfMonth, daysInMonth, ...usage } = u;
   await db.set('monitor/status', {
-    ts: Date.now(), ok: !alerts.some(a => a.level !== 'info'), note, usage,
+    ts: Date.now(), ok: !alerts.some(a => a.level !== 'info'), note, google: googleState, usage,
     alerts: alerts.map(({ key, level, text }) => ({ key, level, text })),
     monthKB: { month, days: kb }
   });
