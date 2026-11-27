@@ -642,22 +642,42 @@ try {
   await ctxS.close();
   sC.close();
 
-  // ======================= E. Old address forwards to the new one =======================
+  // ======================= E. Old addresses forward to the main one =======================
   {
+    const cfg = await import(new URL('../docs/config.js', import.meta.url));
+    const MAIN = cfg.CANONICAL_HOST;
     const { server: sE, url: uE } = await serve({ realConfig: true });
     const ctxE = await browser.newContext({ serviceWorkers: 'block' });
     await mockRates(ctxE);
-    await ctxE.route('https://kratoskumar.github.io/claude_repo/**', async r => {
-      const path = new URL(r.request().url()).pathname.replace('/claude_repo/', '');
+    // Serve the real app files at every address (old and main), as Firebase Hosting / GitHub Pages do.
+    const fromLocal = async (r, prefix) => {
+      const path = new URL(r.request().url()).pathname.replace(prefix, '') || 'index.html';
       const res = await fetch(uE + path);
       r.fulfill({ status: res.status, headers: { 'content-type': res.headers.get('content-type') || 'text/html' }, body: Buffer.from(await res.arrayBuffer()) });
-    });
-    await ctxE.route('https://making-charge.web.app/**', r => r.fulfill({ status: 200, contentType: 'text/html', body: '<!doctype html><title>new home</title>' }));
+    };
+    for (const host of [MAIN, ...cfg.FORWARD_FROM]) {
+      const prefix = host.endsWith('github.io') ? '/claude_repo/' : '/';
+      await ctxE.route(`https://${host}/**`, r => fromLocal(r, prefix));
+    }
     const e = await ctxE.newPage();
-    await step('old GitHub Pages link forwards to making-charge.web.app (keeping #saved)', async () => {
-      await e.goto('https://kratoskumar.github.io/claude_repo/#saved');
-      await e.waitForURL('https://making-charge.web.app/**', { timeout: 15000 });
-      check(e.url() === 'https://making-charge.web.app/#saved', 'forwarded to ' + e.url());
+    await step(`config: main address ${MAIN} is also the sign-in address and is not forwarded`, async () => {
+      check(MAIN && cfg.FIREBASE.authDomain === MAIN, 'authDomain must equal CANONICAL_HOST');
+      check(!cfg.FORWARD_FROM.includes(MAIN), 'the main address must not forward to itself');
+      check(cfg.FORWARD_FROM.length === 3, 'three old addresses');
+      await e.goto(`https://${MAIN}/#saved`);
+      await waitText(e, '#rateStatus', 'Live spot price');
+      await e.waitForTimeout(1500);
+      check(e.url() === `https://${MAIN}/#saved`, 'stayed on ' + e.url());
+    });
+    await step('every old address forwards to the main one, keeping #saved and #admin', async () => {
+      for (const host of cfg.FORWARD_FROM) {
+        const base = host.endsWith('github.io') ? `https://${host}/claude_repo/` : `https://${host}/`;
+        for (const hash of ['', '#saved', '#admin']) {
+          await e.goto(base + hash);
+          await e.waitForURL(u => u.toString().startsWith(`https://${MAIN}/`), { timeout: 15000 });
+          check(e.url() === `https://${MAIN}/${hash}`, `${base}${hash} -> ${e.url()}`);
+        }
+      }
     });
     await ctxE.close();
     sE.close();

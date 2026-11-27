@@ -10,7 +10,8 @@ and see them on all their devices. The owner gets a private dashboard and alerts
   The cloud code loads only when someone signs in. The dashboard code loads only for the owner.
 - **Installable**: "Add to Home Screen" on iPhone or Android.
 
-Main address (after setup): **https://making-charge.web.app**. The old GitHub Pages link forwards there.
+Main address: **https://mcc.tarveengujral.com**. The older addresses (`making-charge.web.app`, `making-charge.firebaseapp.com`
+and the GitHub Pages link) forward there, keeping `#saved` and `#admin`.
 
 ## How the numbers are worked out
 
@@ -114,6 +115,28 @@ because new Google and email users need it; the approval step controls access in
 
 After that, every change merged into `main` deploys automatically through `.github/workflows/deploy.yml`, which also
 publishes the security rules with the owner's UID filled in.
+
+## Changing the app's address
+
+The address lives in [`docs/config.js`](docs/config.js): `authDomain` and `CANONICAL_HOST` must be the same, and
+`FORWARD_FROM` lists the addresses that forward to it. Google sign-in only works when `authDomain` is the address
+the app is opened at, which is why both are set together.
+
+**To switch back to `making-charge.web.app`** (for example before removing the custom domain):
+
+1. In `docs/config.js` set:
+   - `authDomain: 'making-charge.web.app'`
+   - `CANONICAL_HOST = 'making-charge.web.app'`
+   - `FORWARD_FROM = ['mcc.tarveengujral.com', 'making-charge.firebaseapp.com', 'kratoskumar.github.io']`
+
+   Keep the custom domain in that list only while it is still connected. Delete it from the list once the domain is removed.
+2. Bump `VERSION` in `docs/sw.js` and `docs/app.js`, run the tests, and merge into `main`. The deploy is automatic.
+3. Wait until the live site shows the new version.
+4. Only then remove the custom domain in Firebase → Hosting.
+
+Keep the `making-charge.web.app` entries in Google Cloud → Credentials → Web client: the JavaScript origin and the
+`/__/auth/handler` redirect URI. People sign in once more on the restored address and re-add the home-screen icon from it.
+Saved items are unaffected, because they live in the cloud, not at an address.
 
 ## Maintenance
 
