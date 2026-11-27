@@ -1,27 +1,29 @@
 rules_version = '2';
 
-// Security rules for the Making Charge Calculator.
-// Only ONE account can read or write. In the isOwner() function below, replace the
-// placeholder text inside the quotes with that account's User UID
+// Security rules for the Making Charge Calculator (owner + approved members).
+// - The owner (one fixed account) approves who may use saved items and sees usage.
+// - Each member can only read and write their own data under users/{their uid}.
+// - The owner cannot read other people's items or photos, only their item counts.
+// In isOwner() below, the placeholder inside the quotes must be the owner's User UID
 // (Firebase console > Authentication > Users > "User UID" column).
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    function isOwner() {
-      return request.auth != null && request.auth.uid == 'PASTE-YOUR-UID-HERE';
+    function signedIn() { return request.auth != null; }
+    function uid() { return request.auth.uid; }
+    function isOwner() { return signedIn() && uid() == 'PASTE-YOUR-UID-HERE'; }
+    function isMember() {
+      return isOwner() || (signedIn() && exists(/databases/$(database)/documents/members/$(uid())));
     }
+    function me(u) { return signedIn() && uid() == u && isMember(); }
 
-    function str(v, min, max) {
-      return v is string && v.size() >= min && v.size() <= max;
-    }
+    function cfgPath() { return /databases/$(database)/documents/config/app; }
+    function itemLimit() { return exists(cfgPath()) ? get(cfgPath()).data.itemLimit : 100; }
 
-    function pos(v) {
-      return v is number && v > 0 && v < 1000000000000;
-    }
-
-    function amount(v) {
-      return v is number && v > -1000000000000 && v < 1000000000000;
-    }
+    function str(v, min, max) { return v is string && v.size() >= min && v.size() <= max; }
+    function pos(v) { return v is number && v > 0 && v < 1000000000000; }
+    function amount(v) { return v is number && v > -1000000000000 && v < 1000000000000; }
+    function isDay(v) { return v is string && v.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}'); }
 
     function validItem(d) {
       return d.keys().hasOnly(['name', 'link', 'notes', 'market', 'date', 'price', 'cur', 'wt', 'k', 'pf',
@@ -34,7 +36,7 @@ service cloud.firestore {
         && str(d.get('notes', ''), 0, 1000)
         && d.market in ['US', 'IN']
         && d.cur in ['USD', 'INR']
-        && d.date is string && d.date.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}')
+        && isDay(d.date)
         && pos(d.price) && pos(d.wt) && pos(d.rate24)
         && str(d.k, 1, 6)
         && d.pf is number && d.pf > 0 && d.pf <= 1
@@ -46,23 +48,134 @@ service cloud.firestore {
         && d.get('duty', 0) is number && d.get('duty', 0) >= 0 && d.get('duty', 0) <= 100
         && amount(d.gold) && amount(d.making) && amount(d.pct)
         && amount(d.get('perGram', 0)) && amount(d.get('preTax', 0))
-        && str(d.get('thumb', ''), 0, 40000)
+        && str(d.get('thumb', ''), 0, 16000)
         && d.get('photo', false) is bool
         && d.ts is number && d.upd is number;
     }
 
-    match /items/{id} {
-      allow read, delete: if isOwner();
-      allow create, update: if isOwner() && validItem(request.resource.data);
+    function validSettings(s) {
+      return s is map && s.keys().hasOnly(['market', 'cur', 'k', 'customPct', 'tax', 'duty', 't'])
+        && (!('duty' in s) || (s.duty is list && s.duty.size() <= 12))
+        && (!('tax' in s) || (s.tax is map && s.tax.keys().hasOnly(['US', 'IN'])))
+        && (!('customPct' in s) || str(s.customPct, 0, 12))
+        && (!('k' in s) || str(s.k, 1, 6));
     }
 
-    match /photos/{id} {
-      allow read, delete: if isOwner();
+    // ----- access control -----
+    match /members/{u} {
+      allow read: if isOwner() || (signedIn() && uid() == u);
       allow create, update: if isOwner()
-        && request.resource.data.keys().hasOnly(['d'])
-        && request.resource.data.d is string
-        && request.resource.data.d.size() < 900000
-        && request.resource.data.d.matches('data:image/(webp|jpeg);base64,[A-Za-z0-9+/=]+');
+        && request.resource.data.keys().hasOnly(['name', 'email', 'ts'])
+        && str(request.resource.data.get('name', ''), 0, 100)
+        && str(request.resource.data.get('email', ''), 0, 200);
+      allow delete: if isOwner();
+    }
+
+    match /requests/{u} {
+      allow read: if isOwner() || (signedIn() && uid() == u);
+      allow create: if signedIn() && uid() == u && !isMember()
+        && request.resource.data.keys().hasOnly(['name', 'email', 'ts'])
+        && str(request.resource.data.get('name', ''), 0, 100)
+        && str(request.resource.data.get('email', ''), 0, 200)
+        && request.resource.data.ts is number;
+      allow delete: if isOwner() || (signedIn() && uid() == u);
+    }
+
+    match /config/app {
+      allow read: if isMember();
+      allow write: if isOwner()
+        && request.resource.data.keys().hasOnly(['itemLimit', 'maxMembers'])
+        && request.resource.data.itemLimit is int && request.resource.data.itemLimit >= 1 && request.resource.data.itemLimit <= 1000
+        && request.resource.data.maxMembers is int && request.resource.data.maxMembers >= 1 && request.resource.data.maxMembers <= 500;
+    }
+
+    // ----- each person's own data -----
+    match /users/{u} {
+      // count = number of items, last = id of the item added/removed in the same batch.
+      // Pairing count changes with that item's creation/deletion makes the item cap tamper-proof.
+      allow read: if me(u) || isOwner();
+      allow create: if me(u)
+        && request.resource.data.keys().hasOnly(['count', 'last', 'set', 'seen'])
+        && request.resource.data.count == 0
+        && validSettings(request.resource.data.get('set', {}));
+      allow update: if me(u)
+        && request.resource.data.keys().hasOnly(['count', 'last', 'set', 'seen'])
+        && request.resource.data.count is int
+        && validSettings(request.resource.data.get('set', {}))
+        && (request.resource.data.get('seen', 0) is number)
+        && (
+          request.resource.data.count == resource.data.count
+          || (request.resource.data.count == resource.data.count + 1
+              && request.resource.data.count <= itemLimit()
+              && request.resource.data.last is string
+              && !exists(/databases/$(database)/documents/users/$(u)/items/$(request.resource.data.last))
+              && existsAfter(/databases/$(database)/documents/users/$(u)/items/$(request.resource.data.last)))
+          || (request.resource.data.count == resource.data.count - 1
+              && request.resource.data.count >= 0
+              && request.resource.data.last is string
+              && exists(/databases/$(database)/documents/users/$(u)/items/$(request.resource.data.last))
+              && !existsAfter(/databases/$(database)/documents/users/$(u)/items/$(request.resource.data.last)))
+        );
+      allow delete: if false;
+
+      match /items/{id} {
+        allow read: if me(u);
+        allow create: if me(u) && validItem(request.resource.data)
+          && getAfter(/databases/$(database)/documents/users/$(u)).data.count
+               == get(/databases/$(database)/documents/users/$(u)).data.count + 1
+          && getAfter(/databases/$(database)/documents/users/$(u)).data.last == id;
+        allow update: if me(u) && validItem(request.resource.data);
+        allow delete: if me(u)
+          && getAfter(/databases/$(database)/documents/users/$(u)).data.count
+               == get(/databases/$(database)/documents/users/$(u)).data.count - 1
+          && getAfter(/databases/$(database)/documents/users/$(u)).data.last == id;
+      }
+
+      match /photos/{id} {
+        allow read, delete: if me(u);
+        allow create, update: if me(u)
+          && existsAfter(/databases/$(database)/documents/users/$(u)/items/$(id))
+          && request.resource.data.keys().hasOnly(['d'])
+          && request.resource.data.d is string
+          && request.resource.data.d.size() < 300000
+          && request.resource.data.d.matches('data:image/(webp|jpeg);base64,[A-Za-z0-9+/=]+');
+      }
+    }
+
+    // ----- usage numbers for the owner's dashboard (members can only add to them) -----
+    function inc(f) {
+      return request.resource.data.get(f, 0) is int
+        && request.resource.data.get(f, 0) >= (resource == null ? 0 : resource.data.get(f, 0))
+        && request.resource.data.get(f, 0) - (resource == null ? 0 : resource.data.get(f, 0)) <= 20000;
+    }
+    match /stats/{day} {
+      allow read: if isOwner();
+      allow create, update: if isMember() && isDay(day)
+        && request.resource.data.keys().hasOnly(['opens', 'reads', 'writes', 'deletes', 'kb', 'saves',
+                                                 'photoKB', 'errSave', 'errQuota', 'errRates', 'errOther'])
+        && inc('opens') && inc('reads') && inc('writes') && inc('deletes') && inc('kb') && inc('saves')
+        && inc('photoKB') && inc('errSave') && inc('errQuota') && inc('errRates') && inc('errOther');
+    }
+
+    // One marker per person per day: counts daily active people.
+    match /active/{id} {
+      allow read: if isOwner();
+      allow create: if isMember()
+        && request.resource.data.keys().hasOnly(['d', 'u'])
+        && isDay(request.resource.data.d)
+        && request.resource.data.u == uid()
+        && id == request.resource.data.d + '_' + uid();
+    }
+
+    // Owner asks the monitor job to delete a removed person's data.
+    match /purge/{u} {
+      allow read, delete: if isOwner();
+      allow create: if isOwner() && request.resource.data.keys().hasOnly(['ts']);
+    }
+
+    // Written only by the monitor job (service account, which bypasses these rules).
+    match /monitor/{doc} {
+      allow read: if isOwner();
     }
 
     match /{document=**} {

@@ -1,0 +1,33 @@
+# Hourly health check: compares usage with the free-plan limits and opens a GitHub issue
+# (phone notification + email) when something needs attention. Closes it when resolved.
+name: Monitor
+
+on:
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write  # only for a tiny heartbeat commit that keeps this schedule from being paused
+  issues: write
+
+concurrency:
+  group: monitor
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Check the app
+        env:
+          SA: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          OWNER_LOGIN: ${{ github.repository_owner }}
+        run: node scripts/monitor.mjs

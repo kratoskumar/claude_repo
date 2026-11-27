@@ -1,15 +1,16 @@
 # Making Charge Calculator
 
-A light, phone-friendly web app for working out the **making charge** on a piece of gold jewellery
-from its price and gold weight, in **USD or INR**, using the **US or India gold rate** for **today or any
-day in the last 3 years**. Calculations can be saved with a product link and a photo, and are shared
-between phones through one family login.
+A light, phone-friendly web app that works out the **making charge** on gold jewellery from its price and
+gold weight, in **USD or INR**, with the **US or India gold rate** for **today or any day in the last 3 years**.
+Approved friends and family can sign in (Google or email), save calculations with a product link and photo,
+and see them on all their devices. The owner gets a private dashboard and alerts.
 
-- Free to run and free to use: hosted on GitHub Pages, data on Firebase's free plan. No Claude login and no AI at run time.
-- Fast: the calculator is about 22 KB (compressed) and opens instantly and offline after the first visit.
-- Installable: "Add to Home Screen" on iPhone or Android and it opens like an app.
+- **Free**: Firebase's free Spark plan (hosting, login, database) plus GitHub (code, deploys, alerts). No AI or Claude at run time.
+- **Fast**: the calculator is about 25 KB compressed, opens instantly and works offline after the first visit.
+  The cloud code loads only when someone signs in. The dashboard code loads only for the owner.
+- **Installable**: "Add to Home Screen" on iPhone or Android.
 
-App address (once GitHub Pages is switched on, see step 3): **https://kratoskumar.github.io/claude_repo/**
+Main address (after setup): **https://making-charge.web.app**. The old GitHub Pages link forwards there.
 
 ## How the numbers are worked out
 
@@ -21,110 +22,114 @@ App address (once GitHub Pages is switched on, see step 3): **https://kratoskuma
 | Making % | making charge ÷ gold value × 100 |
 | Making per gram | making charge ÷ weight |
 
-- **US rate** = live international spot price (USD per troy ounce, 1 oz = 31.1034768 g).
-- **India rate (estimate)** = international price × USD-INR × (1 + Indian import duty). GST is not included.
-  Duty used by date: 15% before 24 Jul 2024, 6% from 24 Jul 2024, 15% from 13 May 2026.
-  You can change this in Settings if the duty changes again.
-  A jeweller's board rate can differ by a few percent, so you can always type their rate over the estimate.
-- **Purity** (fraction of the 24K rate): India uses BIS hallmark values (22K = 91.6%, 18K = 75%, 14K = 58.5%,
-  9K = 37.5%); the US uses karat ÷ 24 (22K = 91.67%, 14K = 58.33%, 10K = 41.67%). Custom % is also available.
-- **GST** (India, default 3%) and **sales tax** (US, default off) are applied to the whole bill when ticked.
-- Prices are converted between USD and INR at the rate for the chosen date (today = latest rate). You can type your own rate.
+- **US rate**: the live international spot price (USD per troy ounce; 1 oz = 31.1034768 g).
+- **India rate (estimate)**: international price × USD-INR × (1 + Indian import duty). GST is not included.
+  Duty by date: 15% before 24 Jul 2024, 6% from 24 Jul 2024, 15% from 13 May 2026. This is editable in ⚙ Settings.
+  Jewellers' board rates can differ by a few percent; type theirs over the estimate.
+- **Purity** is a fraction of the 24K rate.
+  India uses BIS fineness: 22K = 91.6%, 18K = 75%, 14K = 58.5%, 9K = 37.5%.
+  The US uses karat ÷ 24: 22K = 91.67%, 14K = 58.33%, 10K = 41.67%. Custom % is also available.
+- **Rates**: gold-api.com for the live price, plus the currency-api daily feed for gold and USD-INR from 2 Mar 2024 onward.
+  Frankfurter (ECB) is the USD-INR fallback. Dates before 2 Mar 2024 ask you to type the gold rate.
 
-### Where the rates come from
+## Who can use what
 
-| What | Source | Notes |
-| --- | --- | --- |
-| Today's gold | gold-api.com | live spot price, refreshed every 10 minutes |
-| Past days' gold and USD-INR | currency-api daily reference rates (via jsDelivr, mirror on pages.dev) | available from **2 Mar 2024**; for the 2 days missing from the feed, the previous day is used and the app says so |
-| USD-INR fallback | Frankfurter (European Central Bank rates) | used if the feed has no rate |
+| | Calculator | Saved items | Admin dashboard |
+| --- | --- | --- | --- |
+| Anyone with the link | ✔ | | |
+| Signed in, waiting for approval | ✔ | asks for access | |
+| Approved member | ✔ | their own items only | |
+| Owner | ✔ | their own items only | ✔ |
 
-For dates before 2 Mar 2024 (until that falls out of the 3-year window in March 2027), the app asks you to type the gold rate.
-Past rates are remembered on the phone, so each day is only downloaded once.
+- Sign in with **Google** (one tap), or with **email + password** (with "Forgot password?").
+  Sign in with Apple is not offered: it needs a paid Apple Developer membership ($99/year).
+- New people tap **Request access**. The owner approves or declines in **Admin** and also gets a GitHub alert.
+  Approval reaches the person's phone within seconds, without a reload.
+- Each person's items, photos and settings (market, currency, purity, tax and duty table) are private to them
+  and follow them across devices. The owner sees only how many items each person has, not the items themselves.
 
-## One-time setup (about 15 minutes)
+## Limits that keep it free
 
-### 1. Create the free Firebase project (stores the saved items and the login)
+Firebase Spark plan, official free limits:
 
-1. Go to <https://console.firebase.google.com>, sign in with a Google account, click **Create a project**,
-   give it a name (for example `making-charge`). Google Analytics is not needed: switch it off. Stay on the free **Spark** plan.
-2. **Login:** open **Build → Authentication → Get started**. Under **Sign-in method**, choose **Email/Password**,
-   switch on the first toggle, **Save**.
-3. **The one account:** go to the **Users** tab → **Add user**. Enter the email and a strong password you and your
-   wife will both use. Then copy the **User UID** shown in the list (a long code like `Xy12...`).
-4. (Recommended) **Block new sign-ups:** **Authentication → Settings → User actions**, untick
-   **Enable create (sign-up)**, **Save**. If you don't see this option, skip it: the database rules below
-   already refuse every account except yours.
-5. **Database:** open **Build → Firestore Database → Create database**. If asked for an edition choose **Standard**,
-   pick a location near you (it cannot be changed later), and choose **Start in production mode**.
-6. **Security rules:** in Firestore open the **Rules** tab, delete everything, paste the whole content of
-   [`firebase/firestore.rules`](firebase/firestore.rules), and replace `PASTE-YOUR-UID-HERE` (keep the quotes)
-   with the User UID from step 3. Click **Publish**.
-7. **Web app settings:** click the gear icon → **Project settings** → **Your apps** → the **</>** (Web) button.
-   Give it a nickname, leave Hosting unticked, **Register app**. Copy the values of `apiKey`, `authDomain`,
-   `projectId` and `appId`.
-8. Put those four values into [`docs/config.js`](docs/config.js), or send them to Claude to do it. They are not secret:
-   they only name the project, and the rules from step 6 protect the data.
+| Limit | Amount |
+| --- | --- |
+| Stored data | 1 GiB |
+| Reads | 50,000/day |
+| Writes | 20,000/day |
+| Deletes | 20,000/day |
+| Downloads | 10 GiB/month |
+| Sign-ins | 3,000 active users/day |
+| Hosting | 10 GB storage, 360 MB/day transfer |
 
-### 2. Optional extra lock-down
+Daily limits reset at midnight Pacific time.
 
-In Google Cloud console → **APIs & Services → Credentials**, open the "Browser key" Firebase created and,
-under **Website restrictions**, allow only `https://kratoskumar.github.io/*`. Not required.
+Built-in constraints (the owner can change the first two in Admin → Limits):
 
-### 3. Switch on GitHub Pages (free hosting)
+- **Up to 25 people** with access.
+- **Up to 100 saved items per person**. The database itself enforces this, so it cannot be bypassed.
+- **Photos are shrunk on the phone** to about 200 KB, with list thumbnails of about 9 KB.
 
-In this GitHub repository: **Settings → Pages → Build and deployment → Source: Deploy from a branch**.
-Choose the branch that has these files (`main` after merging, or this working branch) and the folder **/docs**,
-then **Save**. After a minute the app is live at https://kratoskumar.github.io/claude_repo/.
+With these, 25 active people fit comfortably. Downloads (viewing many photos) are the first limit to watch.
 
-### 4. Put it on both phones
+## Owner dashboard and alerts
 
-- **iPhone (Safari):** open the address, tap **Share → Add to Home Screen**.
-- **Android (Chrome):** open the address, menu **⋮ → Install app** (or **Add to Home screen**).
-- Open **Saved → Sign in** once on each phone with the family email and password. Each phone stays signed in.
+- **Admin tab** (owner only):
+  - status and open alerts;
+  - today's reads, writes and deletes against the free limits (exact numbers from Google when available, otherwise the app's estimate);
+  - storage and this month's downloads;
+  - people with access, active today and in the last 30 minutes;
+  - today's problems (failed saves, "free limit reached", gold-rate source failures, other errors);
+  - access requests to approve or decline;
+  - members, with their item counts, last-seen time, and a Remove button that can also delete their data;
+  - limits.
+- **Hourly monitor** (`.github/workflows/monitor.yml`):
+  - checks everything above;
+  - opens a **GitHub issue** that mentions the owner, so it arrives as a GitHub app notification and an email;
+  - comments again only when an alert gets worse, and closes the issue when it clears.
+- **What it watches for:**
+  - 70% (warning) and 90% (urgent) of any daily or monthly limit;
+  - downloads on pace to run out;
+  - any "free limit reached" error;
+  - failed saves, rate-source failures and other errors;
+  - 90% of member places used;
+  - new access requests;
+  - many people active at once;
+  - members at their item limit;
+  - the monitor itself failing.
+- The monitor makes a tiny commit only if the repo has had no activity for 40 days. GitHub pauses scheduled jobs after 60 inactive days.
 
-Share the password privately (in person or a password manager), never inside the app's notes.
+## One-time setup
 
-## Using it
+The app needs these pieces once:
+- a Firebase project (`making-charge`) with Email/Password and Google sign-in turned on;
+- a Firestore database (Standard edition, production mode);
+- Hosting enabled;
+- a web app registered, with its values in [`docs/config.js`](docs/config.js), including `OWNER_UID`;
+- a service-account key stored as the GitHub secret `FIREBASE_SERVICE_ACCOUNT`, with the roles Firebase Admin, Service Usage Consumer and Monitoring Viewer;
+- `https://making-charge.web.app/__/auth/handler` added as an authorized redirect URI on the OAuth "Web client" in Google Cloud console.
 
-1. Choose **US rate** or **India rate**, and the date (defaults to today).
-2. Enter the item **price** (tap $ USD or ₹ INR), the **gold weight** in grams and the **purity**.
-   Tick or untick "Price includes GST" to match the price tag. Add stones/other charges if the price includes them.
-3. Read the making charge as an amount, as % of gold value, and per gram. To use your jeweller's rate,
-   type it into the 24K or the item-purity rate box. **Use market rate** switches back.
-4. **Save** adds a name, product link, notes and an optional photo (shrunk to about 100–300 KB before upload).
-   **Saved** lists everything; tap an item to see the photo, open the product page, edit it in the calculator,
-   save a copy, or delete it.
+Claude walks through these step by step. Keep **Authentication → Settings → User actions → Enable create (sign-up)** switched **on**,
+because new Google and email users need it; the approval step controls access instead.
 
-## Free plan limits
+After that, every change merged into `main` deploys automatically through `.github/workflows/deploy.yml`, which also
+publishes the security rules with the owner's UID filled in.
 
-Firebase Spark (free): 1 GiB of storage, 50,000 reads and 20,000 writes per day. With photos at about
-100–300 KB, that is several thousand saved items, and two people's daily use is a tiny fraction of the
-daily limits. The project never pauses for inactivity. GitHub Pages and the rate sources are free.
+## Maintenance
 
-## Security
-
-- Only the one Firebase account (by its UID) can read or write anything; everyone else, signed in or not, is refused.
-  The rules also check the shape and size of every saved item and photo.
-- Passwords are handled by Firebase (Google); the app never stores them. "Sign out" also wipes that phone's offline copy.
-- Product links are only opened if they are normal web links (`https://…`), in a new tab.
-- A strict Content Security Policy limits the page to its own code and the services listed above.
-
-## Maintenance notes
-
-- After changing any file in `docs/`, bump `VERSION` in **both** `docs/sw.js` and `docs/app.js`, so phones pick
-  up the new version (they update automatically on next open).
-- If India changes its gold import duty, edit it in the app (⚙ Settings) and/or update `DEFAULT_DUTY` in `docs/calc.js`.
+- After changing files in `docs/`, bump `VERSION` in both `docs/sw.js` and `docs/app.js` so phones update.
+- If India changes its gold import duty, update it in ⚙ Settings (it syncs per person) and `DEFAULT_DUTY` in `docs/calc.js`.
 
 ## Development and tests
 
-Requires Node 20+ and Java 21 (for the Firebase emulator). Playwright with Chromium must be installed.
+Requires Node 20+, Java 21 (Firebase emulator) and Playwright with Chromium.
 
 ```bash
 npm install
-npm run test:unit        # calculation, number parsing, rate fetching (live + failure cases)
-npm run test:rules       # Firestore security rules in the emulator
-npm run test:components  # photo shrinking + cloud saving in a real browser
-npm run test:e2e         # 32 end-to-end steps on phone-sized screens (calculator, saving, sync, offline, updates)
+npm run test:unit        # calculations, number parsing, rates (live + failures), monitor alert rules
+npm run test:rules       # database security rules (owner, members, requests, item cap, privacy)
+npm run test:monitor     # hourly monitor against the emulator with fake Google/GitHub services
+npm run test:components  # photo shrinking, cloud saving, approval flow, dashboard in a real browser
+npm run test:e2e         # 35 end-to-end steps on phone screens, including Google sign-in (emulator)
 npm run serve            # local copy at http://127.0.0.1:8000/claude_repo/
 ```

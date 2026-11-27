@@ -1,7 +1,13 @@
 import * as C from './calc.js';
 import { getRates, clearCache } from './rates.js';
+import { CANONICAL_HOST } from './config.js';
 
-const VERSION = '1.0.0';
+// One address for everyone: the old GitHub Pages link and the firebaseapp.com address move to the main one.
+if (CANONICAL_HOST && location.hostname !== CANONICAL_HOST && /(\.github\.io|\.firebaseapp\.com)$/.test(location.hostname)) {
+  location.replace(`https://${CANONICAL_HOST}/${location.hash}`);
+}
+
+const VERSION = '1.1.0';
 const $ = id => document.getElementById(id);
 const today = () => C.localISO();
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -269,6 +275,7 @@ async function loadRates() {
   if (id !== reqId) return;
   R = { ...r, date: d, loading: false };
   render();
+  if (cloudMod && ((R.gold == null && d >= C.HIST_START) || R.fx == null)) cloudMod.track('errRates', 1);
 }
 
 // ---------- input handlers ----------
@@ -277,12 +284,12 @@ function onField(id, key, after) {
 }
 onField('price', 'price');
 onField('wt', 'wt');
-onField('customPct', 'customPct');
+onField('customPct', 'customPct', prefsChanged);
 onField('other', 'other');
 
-$('purity').addEventListener('change', e => { S.k = e.target.value; persist(); render(); if (S.k === 'custom') $('customPct').focus(); });
-$('taxIncl').addEventListener('change', e => { S.tax[S.market].incl = e.target.checked; persist(); render(); });
-$('taxPct').addEventListener('input', e => { S.tax[S.market].pct = e.target.value; persist(); render(); });
+$('purity').addEventListener('change', e => { S.k = e.target.value; persist(); render(); prefsChanged(); if (S.k === 'custom') $('customPct').focus(); });
+$('taxIncl').addEventListener('change', e => { S.tax[S.market].incl = e.target.checked; persist(); render(); prefsChanged(); });
+$('taxPct').addEventListener('input', e => { S.tax[S.market].pct = e.target.value; persist(); render(); prefsChanged(); });
 
 $('marketSeg').addEventListener('click', e => {
   const v = e.target.closest('button')?.dataset.v;
@@ -290,12 +297,12 @@ $('marketSeg').addEventListener('click', e => {
   S.market = v;
   S.manualRate = null; // a typed rate belongs to one market's currency/unit
   buildPurity();
-  persist(); render();
+  persist(); render(); prefsChanged();
 });
 $('curSeg').addEventListener('click', e => {
   const v = e.target.closest('button')?.dataset.v;
   if (!v || v === S.priceCur) return;
-  S.priceCur = v; persist(); render();
+  S.priceCur = v; persist(); render(); prefsChanged();
 });
 
 function setDate(v) {
@@ -361,21 +368,34 @@ function toast(msg, ms = 2800) {
 }
 
 // ---------- views ----------
+const viewFromHash = () => (location.hash === '#saved' ? 'saved' : location.hash === '#admin' ? 'admin' : 'calc');
+let view = 'calc';
 function setView(v, push = true) {
-  const saved = v === 'saved';
-  $('calcView').hidden = saved;
-  $('savedView').hidden = !saved;
-  $('tabCalc').setAttribute('aria-pressed', String(!saved));
-  $('tabSaved').setAttribute('aria-pressed', String(saved));
-  if (push && (location.hash === '#saved') !== saved) history.pushState(null, '', saved ? '#saved' : location.pathname + location.search);
-  if (saved) openSaved();
+  if (v === 'admin' && !isOwnerUser()) v = cloudMod || !LS.get('mc:owner', 0) ? 'calc' : 'admin';
+  view = v;
+  $('calcView').hidden = v !== 'calc';
+  $('savedView').hidden = v !== 'saved';
+  $('adminView').hidden = v !== 'admin';
+  $('tabCalc').setAttribute('aria-pressed', String(v === 'calc'));
+  $('tabSaved').setAttribute('aria-pressed', String(v === 'saved'));
+  $('tabAdmin').setAttribute('aria-pressed', String(v === 'admin'));
+  const hash = v === 'calc' ? '' : '#' + v;
+  if (push && location.hash !== hash) history.pushState(null, '', hash || location.pathname + location.search);
+  if (v === 'saved') openSaved();
+  if (v === 'admin') openAdmin();
 }
 $('tabCalc').addEventListener('click', () => setView('calc'));
 $('tabSaved').addEventListener('click', () => setView('saved'));
-addEventListener('popstate', () => setView(location.hash === '#saved' ? 'saved' : 'calc', false));
+$('tabAdmin').addEventListener('click', () => setView('admin'));
+addEventListener('popstate', () => setView(viewFromHash(), false));
 
 // ---------- cloud (lazy) ----------
-let cloudMod = null, cloudLoading = null, user = null, items = null, itemsErr = null, unsubItems = null, startWatchSoon = false;
+// user: signed-in account; member: approved (true/false, null = checking); requested: access asked.
+let cloudMod = null, cloudLoading = null, user = null, member = null, requested = null;
+let meta = null, limits = null, items = null, itemsErr = null;
+let unsubMember = null, unsubMeta = null, unsubItems = null, userToken = 0;
+let notConfigured = false;
+const isOwnerUser = () => !!(cloudMod && user && cloudMod.isOwner(user));
 
 function cloud() {
   if (cloudMod) return Promise.resolve(cloudMod);
@@ -384,16 +404,10 @@ function cloud() {
       const m = await import('./cloud.js');
       if (!m.configured()) return null;
       await m.init();
-      user = await m.currentUser();
-      if (user) { LS.set('mc:signed', 1); startWatchSoon = true; }
-      await m.onUser(u => {
-        user = u;
-        if (u) { LS.set('mc:signed', 1); if (cloudMod) startWatch(); }
-        else { stopWatch(); LS.del('mc:signed'); }
-        renderSaved();
-      });
+      const u = await m.currentUser();
       cloudMod = m;
-      if (startWatchSoon) startWatch();
+      onUserChange(u);
+      await m.onUser(onUserChange);
       return m;
     })();
     cloudLoading.catch(() => { cloudLoading = null; });
@@ -401,38 +415,87 @@ function cloud() {
   return cloudLoading;
 }
 
-async function startWatch() {
-  if (unsubItems) return;
-  unsubItems = 'pending';
-  try {
-    unsubItems = await cloudMod.watchItems(
-      list => { items = list; itemsErr = null; renderSaved(); },
-      err => { itemsErr = err; unsubItems = null; renderSaved(); }
-    );
-  } catch (e) { itemsErr = e; unsubItems = null; renderSaved(); }
-}
-function stopWatch() {
-  if (typeof unsubItems === 'function') unsubItems();
-  unsubItems = null; items = null; itemsErr = null;
+function stopUserWatches() {
+  for (const un of [unsubMember, unsubMeta, unsubItems]) if (typeof un === 'function') un();
+  unsubMember = unsubMeta = unsubItems = null;
 }
 
-function gate(msg, button) {
+function onUserChange(u) {
+  if (u && user && u.uid === user.uid && member !== null) return; // same account, already set up
+  stopUserWatches();
+  const token = ++userToken;
+  user = u || null; member = null; requested = null; meta = null; items = null; itemsErr = null;
+  $('tabAdmin').hidden = !isOwnerUser();
+  document.body.classList.toggle('owner', isOwnerUser());
+  if (!user) {
+    LS.del('mc:signed'); LS.del('mc:owner');
+    cloudMod.enableReporting(false);
+    if (view === 'admin') setView('calc');
+    renderSaved();
+    return;
+  }
+  LS.set('mc:signed', 1);
+  if (isOwnerUser()) { LS.set('mc:owner', 1); checkOwnerAlerts(); }
+  cloudMod.watchMembership(user, ok => {
+    if (token !== userToken) return;
+    const was = member;
+    member = ok;
+    if (ok) startMember(token);
+    else {
+      for (const un of [unsubMeta, unsubItems]) if (typeof un === 'function') un();
+      unsubMeta = unsubItems = null; items = null; meta = null;
+      cloudMod.enableReporting(false);
+      cloudMod.getRequest(user.uid).then(r => { if (token === userToken) { requested = r; renderSaved(); } }).catch(() => {});
+      if (was === true) toast('Your access to saved items was removed.', 5000);
+    }
+    renderSaved();
+    afterMemberKnown();
+  }, err => { if (token === userToken) { itemsErr = err; renderSaved(); } }).then(un => {
+    if (token === userToken) unsubMember = un; else un();
+  });
+  renderSaved();
+}
+
+async function startMember(token) {
+  if (unsubItems) return;
+  unsubItems = 'pending';
+  cloudMod.enableReporting(true);
+  cloudMod.track('opens', 1);
+  cloudMod.touch(user.uid);
+  try {
+    limits = await cloudMod.getLimits();
+    const un1 = await cloudMod.watchMeta(user.uid, m => { meta = m; applyRemoteSettings(m.set); renderSaved(); }, onCloudError);
+    const un2 = await cloudMod.watchItems(user.uid,
+      list => { items = list; itemsErr = null; renderSaved(); },
+      err => { itemsErr = err; renderSaved(); });
+    if (token !== userToken) { un1(); un2(); return; }
+    unsubMeta = un1; unsubItems = un2;
+  } catch (e) {
+    unsubItems = null; itemsErr = e; renderSaved();
+  }
+}
+function onCloudError(e) { if (e && e.code === 'resource-exhausted') { itemsErr = e; renderSaved(); } }
+
+function gate(msg, buttons = [], sub = '') {
   const g = $('savedGate');
   g.textContent = '';
   const p = document.createElement('p');
   p.textContent = msg;
   g.append(p);
-  if (button) {
-    const b = document.createElement('button');
-    b.type = 'button'; b.className = 'btn primary'; b.textContent = button.label;
-    b.addEventListener('click', button.onClick);
-    g.append(b);
+  if (sub) { const s = document.createElement('p'); s.className = 'sub'; s.textContent = sub; g.append(s); }
+  const row = document.createElement('div');
+  row.className = 'gate-actions';
+  for (const b of buttons) {
+    const el = document.createElement('button');
+    el.type = 'button'; el.className = `btn ${b.primary ? 'primary' : ''}`; el.textContent = b.label;
+    el.addEventListener('click', b.onClick);
+    row.append(el);
   }
+  if (buttons.length) g.append(row);
   g.hidden = false;
   $('savedBody').hidden = true;
 }
 
-let notConfigured = false;
 async function openSaved() {
   if (notConfigured) return renderSaved();
   if (!cloudMod) gate('Loading saved items…');
@@ -440,28 +503,45 @@ async function openSaved() {
     const m = await cloud();
     if (!m) notConfigured = true;
   } catch {
-    gate('Could not load cloud saving. Check the internet connection.', { label: 'Try again', onClick: openSaved });
+    gate('Could not load cloud saving. Check the internet connection.', [{ label: 'Try again', primary: true, onClick: openSaved }]);
     return;
   }
   renderSaved();
 }
 
+const signOutBtn = { label: 'Sign out', onClick: () => doSignOut() };
 function renderSaved() {
   const n = $('savedCount');
-  n.hidden = !(user && items && items.length);
+  n.hidden = !(member && items && items.length);
   n.textContent = items ? String(items.length) : '';
   if ($('savedView').hidden) return;
   if (notConfigured) return gate('Cloud saving is not set up yet. Follow the one-time Firebase steps in the README, then reload.');
   if (!cloudMod) return;
-  if (!user) return gate('Sign in with the family account to see saved items.', { label: 'Sign in', onClick: () => askSignIn() });
+  if (!user) return gate('Sign in to save calculations with photos and links, and see them on all your devices.', [{ label: 'Sign in', primary: true, onClick: () => askSignIn() }]);
+  const who = user.email || user.displayName || 'this account';
+  if (member === null) return gate('Checking your access…');
+  if (member === false) {
+    if (requested === null) return gate('Checking your access…');
+    if (requested) return gate('Your request has been sent.', [signOutBtn], `You can save items as soon as the owner approves ${who}. This page updates by itself.`);
+    return gate(`You're signed in as ${who}.`, [{ label: 'Request access', primary: true, onClick: doRequest }, signOutBtn],
+      'Saving is invite-only to keep this free app fast for everyone. The owner approves each person.');
+  }
   if (itemsErr) {
-    return gate(itemsErr.code === 'permission-denied'
-      ? 'This account is not allowed to read saved items. Check that the Firestore rules contain this account\'s UID (see README).'
-      : `Could not load saved items (${itemsErr.code || itemsErr.message}).`, { label: 'Try again', onClick: () => { itemsErr = null; startWatch(); renderSaved(); } });
+    const code = itemsErr.code;
+    return gate(code === 'resource-exhausted'
+      ? 'The app has reached its free daily limit. Saved items will be back after midnight Pacific time. The calculator still works.'
+      : code === 'permission-denied'
+        ? 'Your access to saved items has been removed or is not set up yet.'
+        : `Could not load saved items (${code || itemsErr.message}).`,
+    [{ label: 'Try again', primary: true, onClick: () => { itemsErr = null; stopUserWatches(); member = null; onUserChange(user); } }]);
   }
   if (!items) return gate('Loading saved items…');
   $('savedGate').hidden = true;
   $('savedBody').hidden = false;
+  const lim = limits ? limits.itemLimit : null;
+  const used = meta ? meta.count : items.length;
+  $('savedInfo').textContent = lim ? `${used} of ${lim} saved` + (used >= lim ? ' · limit reached: delete old items to save new ones' : '') : '';
+  $('savedInfo').classList.toggle('bad-text', !!lim && used >= lim);
   const q = $('search').value.trim().toLowerCase();
   const shown = q ? items.filter(it => [it.name, it.notes, it.link].some(s => String(s || '').toLowerCase().includes(q))) : items;
   const ul = $('list');
@@ -471,6 +551,25 @@ function renderSaved() {
   $('empty').textContent = items.length ? 'Nothing matches your search.' : 'No saved items yet. Use Save on the calculator.';
 }
 $('search').addEventListener('input', renderSaved);
+
+async function doRequest() {
+  try {
+    await cloudMod.requestAccess(user);
+    requested = true;
+    toast('Request sent');
+  } catch (e) {
+    toast(`Could not send the request (${e.code || e.message}).`, 5000);
+  }
+  renderSaved();
+}
+
+async function doSignOut() {
+  if (!confirm('Sign out on this device? Saved items stay safe in the cloud.')) return;
+  LS.del('mc:signed'); LS.del('mc:owner');
+  try { await cloudMod.signOut(); } catch { /* still reload */ }
+  persistNow();
+  location.reload();
+}
 
 const isImg = s => typeof s === 'string' && /^data:image\/(webp|jpeg|png);base64,/.test(s);
 
@@ -496,6 +595,37 @@ function listRow(it) {
   return li;
 }
 
+// ---------- owner dashboard ----------
+let adminMod = null;
+async function openAdmin() {
+  const root = $('adminBody');
+  if (!root.childElementCount) root.textContent = 'Loading dashboard…';
+  try {
+    const m = await cloud();
+    if (!m || !isOwnerUser()) { setView('calc'); return; }
+    adminMod ||= await import('./admin.js');
+    const data = await adminMod.load();
+    adminMod.render(root, data, { toast, refresh: openAdmin, ownerUid: user.uid });
+    setAdminDot(data.requests.length > 0 || ((data.status && data.status.alerts) || []).length > 0);
+  } catch (e) {
+    root.textContent = `Could not load the dashboard (${e.code || e.message}).`;
+  }
+}
+function setAdminDot(on) { $('adminDot').hidden = !on; }
+async function checkOwnerAlerts() {
+  try {
+    const s = await cloudMod.monitorStatus();
+    const alerts = (s && s.alerts) || [];
+    const pending = s && s.usage ? s.usage.pending || 0 : 0;
+    setAdminDot(alerts.length > 0 || pending > 0);
+    const key = 'mc:alertSeen';
+    if (alerts.some(a => a.level === 'crit') && LS.get(key, '') !== C.localISO()) {
+      LS.set(key, C.localISO());
+      toast('Admin: an alert needs attention. Open the Admin tab.', 5000);
+    }
+  } catch { /* not critical */ }
+}
+
 // ---------- sign in ----------
 const AUTH_MSG = {
   'auth/invalid-credential': 'Wrong email or password.',
@@ -504,45 +634,90 @@ const AUTH_MSG = {
   'auth/user-not-found': 'Wrong email or password.',
   'auth/invalid-email': 'That email address does not look right.',
   'auth/missing-password': 'Enter the password.',
+  'auth/missing-email': 'Enter your email address.',
+  'auth/email-already-in-use': 'There is already an account with this email. Sign in instead (or use "Forgot password?").',
+  'auth/weak-password': 'Use a password of at least 8 characters.',
   'auth/too-many-requests': 'Too many attempts. Wait a few minutes and try again.',
   'auth/network-request-failed': 'No internet connection. Try again when online.',
   'auth/user-disabled': 'This account has been disabled.',
-  'auth/operation-not-allowed': 'Email/password sign-in is not enabled in Firebase (see README).',
+  'auth/operation-not-allowed': 'This sign-in method is not switched on in Firebase (see README).',
+  'auth/admin-restricted-operation': 'New accounts are switched off in Firebase. Turn on "Enable create (sign-up)" (see README).',
+  'auth/unauthorized-domain': 'This web address is not allowed for sign-in yet (see README: Authorized domains).',
+  'auth/popup-blocked': 'The browser blocked the sign-in window. Try again.',
   'auth/api-key-not-valid.-please-pass-a-valid-api-key.': 'The Firebase settings in config.js look wrong.',
   'auth/invalid-api-key': 'The Firebase settings in config.js look wrong.'
 };
+const authMsg = ex => AUTH_MSG[ex.code] || `Could not sign in (${ex.code || ex.message}).`;
 
-let signResolve = null;
-async function askSignIn() {
+let signResolve = null, signMode = 'in';
+function setSignMode(mode) {
+  signMode = mode;
+  const up = mode === 'up';
+  $('signTitle').textContent = up ? 'Create an account' : 'Sign in';
+  $('nameWrap').hidden = !up;
+  $('password').autocomplete = up ? 'new-password' : 'current-password';
+  $('signBtn').textContent = up ? 'Create account' : 'Sign in';
+  $('modeText').textContent = up ? 'Already have an account?' : 'New here?';
+  $('modeBtn').textContent = up ? 'Sign in' : 'Create an account';
+  $('forgotBtn').hidden = up;
+  $('signErr').hidden = true;
+}
+async function askSignIn(intent = '') {
   let m;
   try { m = await cloud(); } catch { toast('Could not load sign-in. Check the internet connection.'); return false; }
   if (!m) { notConfigured = true; toast('Cloud saving is not set up yet (see README).'); return false; }
   if (user) return true;
-  const dlg = $('signDlg');
-  $('signErr').hidden = true;
+  signIntent = intent;
+  setSignMode('in');
   $('password').value = '';
-  dlg.showModal();
-  $('email').focus();
+  $('signDlg').showModal();
   return new Promise(res => { signResolve = res; });
 }
+let signIntent = '';
 function endSignIn(ok) {
   const r = signResolve; signResolve = null;
   if ($('signDlg').open) $('signDlg').close();
   r && r(ok);
   runPendingUpdate();
 }
+$('modeBtn').addEventListener('click', () => setSignMode(signMode === 'up' ? 'in' : 'up'));
+$('googleBtn').addEventListener('click', async () => {
+  try {
+    sessionStorage.setItem('mc:redirect', JSON.stringify({ view, intent: signIntent }));
+  } catch { /* ignore */ }
+  $('googleBtn').disabled = true;
+  try {
+    await cloudMod.signInGoogle(); // leaves the page; we come back signed in
+  } catch (ex) {
+    $('googleBtn').disabled = false;
+    $('signErr').textContent = authMsg(ex);
+    $('signErr').hidden = false;
+  }
+});
+$('forgotBtn').addEventListener('click', async () => {
+  const email = $('email').value.trim();
+  const err = $('signErr');
+  if (!email) { err.textContent = 'Type your email above first, then tap "Forgot password?".'; err.hidden = false; return; }
+  try {
+    await cloudMod.resetPassword(email);
+    err.hidden = true;
+    toast('If that email has an account, a reset link is on its way (check spam).', 5000);
+  } catch (ex) { err.textContent = authMsg(ex); err.hidden = false; }
+});
 $('signForm').addEventListener('submit', async e => {
   e.preventDefault();
   const email = $('email').value, pw = $('password').value;
   const err = $('signErr');
   if (!email.trim() || !pw) { err.textContent = 'Enter the email and password.'; err.hidden = false; return; }
+  if (signMode === 'up' && pw.length < 8) { err.textContent = 'Use a password of at least 8 characters.'; err.hidden = false; return; }
   $('signBtn').disabled = true;
   try {
-    await cloudMod.signIn(email, pw);
+    if (signMode === 'up') await cloudMod.signUpEmail(email, pw, $('suName').value);
+    else await cloudMod.signInEmail(email, pw);
     endSignIn(true);
-    toast('Signed in');
+    toast(signMode === 'up' ? 'Account created' : 'Signed in');
   } catch (ex) {
-    err.textContent = AUTH_MSG[ex.code] || `Could not sign in (${ex.code || ex.message}).`;
+    err.textContent = authMsg(ex);
     err.hidden = false;
   } finally {
     $('signBtn').disabled = false;
@@ -550,6 +725,61 @@ $('signForm').addEventListener('submit', async e => {
 });
 $('signCancel').addEventListener('click', () => endSignIn(false));
 $('signDlg').addEventListener('cancel', () => endSignIn(false));
+
+// Coming back from Google sign-in.
+let afterSignIn = null;
+async function finishRedirect() {
+  let info = null;
+  try { info = JSON.parse(sessionStorage.getItem('mc:redirect')); sessionStorage.removeItem('mc:redirect'); } catch { /* ignore */ }
+  if (!info) return;
+  try {
+    const m = await cloud();
+    if (!m) return;
+    await m.redirectResult();
+    afterSignIn = info.intent || null;
+    if (info.view && info.view !== 'calc') setView(info.view);
+  } catch (ex) {
+    toast(authMsg(ex), 6000);
+  }
+}
+// Once we know whether a newly signed-in person is approved, continue what they were doing.
+function afterMemberKnown() {
+  if (afterSignIn !== 'save') return;
+  afterSignIn = null;
+  if (member) openSave();
+  else { setView('saved'); toast('Ask for access first: the owner approves each person.', 5000); }
+}
+
+// ---------- settings that follow each person across devices ----------
+let prefTimer = 0, pushedPrefs = false;
+function prefs() {
+  return { market: S.market, cur: S.priceCur, k: S.k, customPct: S.customPct, tax: S.tax, duty };
+}
+function prefsChanged() {
+  LS.set('mc:prefT', Date.now());
+  if (!member || !cloudMod || !user) return;
+  clearTimeout(prefTimer);
+  prefTimer = setTimeout(() => cloudMod.saveSettings(user.uid, { ...prefs(), t: LS.get('mc:prefT', Date.now()) }).catch(() => {}), 4000);
+}
+function applyRemoteSettings(set) {
+  if (!set || !set.t) { if (!pushedPrefs) { pushedPrefs = true; prefsChanged(); } return; }
+  if (set.t <= LS.get('mc:prefT', 0)) return;
+  if (set.market === 'US' || set.market === 'IN') S.market = set.market;
+  if (set.cur === 'USD' || set.cur === 'INR') S.priceCur = set.cur;
+  if (C.PURITIES.some(p => p.k === set.k) || set.k === 'custom') S.k = set.k;
+  if (typeof set.customPct === 'string') S.customPct = set.customPct;
+  for (const mk of ['US', 'IN']) {
+    const t = set.tax && set.tax[mk];
+    if (t && typeof t.incl === 'boolean' && typeof t.pct === 'string') S.tax[mk] = { incl: t.incl, pct: t.pct.slice(0, 10) };
+  }
+  if (Array.isArray(set.duty) && set.duty.length && set.duty.every(r => r && C.isISODate(r.from) && Number.isFinite(r.pct))) {
+    duty = set.duty.map(r => ({ from: r.from, pct: r.pct }));
+    LS.set('mc:duty', duty);
+  }
+  LS.set('mc:prefT', set.t);
+  S.manualRate = null;
+  buildPurity(); persist(); render();
+}
 
 // ---------- save ----------
 let pendingPhoto; // undefined = unchanged, null = removed, { photo, thumb } = new
@@ -581,7 +811,19 @@ function openSave() {
   $('sErr').hidden = true;
   $('saveDlg').showModal();
 }
-$('saveBtn').addEventListener('click', openSave);
+async function onSaveClick() {
+  if (!compute().res.ok) return;
+  let m;
+  try { m = await cloud(); } catch { toast('Could not connect. Check the internet connection and try again.', 4000); return; }
+  if (!m) { openSave(); return; } // explains that cloud saving is not set up
+  if (!user && !(await askSignIn('save'))) return;
+  const t0 = Date.now();
+  while (member === null && Date.now() - t0 < 8000) await sleep(100);
+  if (member) { openSave(); return; }
+  setView('saved');
+  if (member === false) toast('Ask for access first: the owner approves each person.', 5000);
+}
+$('saveBtn').addEventListener('click', onSaveClick);
 
 $('sPhoto').addEventListener('change', async e => {
   const file = e.target.files && e.target.files[0];
@@ -609,7 +851,7 @@ $('sRemovePhoto').addEventListener('click', () => {
 });
 
 const FS_MSG = {
-  'permission-denied': 'Not allowed. Check that the Firestore rules contain this account\'s UID (see README).',
+  'permission-denied': 'Not allowed: your item limit may be reached, or your access was removed.',
   'unauthenticated': 'Please sign in again.',
   'resource-exhausted': 'The free Firebase daily limit was reached. Try again tomorrow.',
   'invalid-argument': 'Something in this item could not be saved (too large?).'
@@ -638,7 +880,11 @@ $('saveForm').addEventListener('submit', async e => {
     try { m = await cloud(); } catch { return fail('Could not connect. Check the internet connection and try again.'); }
     if (!m) { notConfigured = true; return fail('Cloud saving is not set up yet. See the README for the one-time Firebase setup.'); }
     if (!(await askSignIn())) return;
+    if (!member) return fail('Your account is not approved for saving yet. Open Saved to request access.');
     const editId = S.editing && !asNew ? S.editing.id : null;
+    if (!editId && meta && limits && meta.count >= limits.itemLimit) {
+      return fail(`You have reached the limit of ${limits.itemLimit} saved items. Delete some old ones to save new ones.`);
+    }
     const data = {
       name: name.slice(0, 120), link, notes, market: S.market, date: c.d,
       price: c.price, cur: S.priceCur, wt: c.wt, k: S.k, pf: c.factor, other: c.res.other,
@@ -652,14 +898,14 @@ $('saveForm').addEventListener('submit', async e => {
     else if (pendingPhoto === null) { photoArg = editId ? null : undefined; data.thumb = ''; data.photo = false; }
     else if (!editId && S.editing && S.editing.photo) {
       // "Save as new" from an item with a photo: copy the photo too.
-      photoArg = (await cloudMod.getPhoto(S.editing.id).catch(() => null)) || undefined;
+      photoArg = (await cloudMod.getPhoto(user.uid, S.editing.id).catch(() => null)) || undefined;
       const ex = existingItem(S.editing.id);
       data.thumb = photoArg && ex && isImg(ex.thumb) ? ex.thumb : '';
       data.photo = !!photoArg;
     } else if (!editId) { data.thumb = ''; data.photo = false; }
     // When editing with the photo unchanged, thumb/photo are left out and kept by a merge.
 
-    const { done } = await cloudMod.saveItem(editId, data, photoArg);
+    const { done } = await cloudMod.saveItem(user.uid, editId, data, photoArg);
     const r = await Promise.race([done.then(() => 'ok', x => x), sleep(6000).then(() => 'slow')]);
     if (r !== 'ok' && r !== 'slow') return fail(FS_MSG[r.code] || `Could not save (${r.code || r.message}).`);
     if (r === 'slow') {
@@ -719,7 +965,7 @@ function openItem(it) {
   if (it.photo) {
     if (isImg(it.thumb)) { img.src = it.thumb; img.hidden = false; }
     pm.textContent = 'Loading photo…';
-    cloudMod.getPhoto(it.id).then(d => {
+    cloudMod.getPhoto(user.uid, it.id).then(d => {
       if (openId !== it.id) return;
       if (isImg(d)) { img.src = d; img.hidden = false; pm.textContent = ''; }
       else pm.textContent = 'Photo not found.';
@@ -757,7 +1003,7 @@ $('iDelete').addEventListener('click', async () => {
   const it = existingItem(openId);
   if (!it || !confirm(`Delete “${it.name}”? This cannot be undone.`)) return;
   try {
-    const { done } = await cloudMod.deleteItem(it.id);
+    const { done } = await cloudMod.deleteItem(user.uid, it.id);
     const r = await Promise.race([done.then(() => 'ok', x => x), sleep(6000).then(() => 'slow')]);
     if (r !== 'ok' && r !== 'slow') { toast(FS_MSG[r.code] || `Could not delete (${r.code || r.message}).`, 5000); return; }
     if (S.editing && S.editing.id === it.id) { S.editing = null; persist(); render(); }
@@ -800,26 +1046,23 @@ function saveDuty(rerender) {
   LS.set('mc:duty', duty);
   if (rerender) renderDuty();
   render();
+  prefsChanged();
 }
 $('dutyAdd').addEventListener('click', () => { duty.push({ from: today(), pct: C.dutyOn(today(), duty) }); saveDuty(true); });
-$('dutyReset').addEventListener('click', () => { duty = C.DEFAULT_DUTY.map(r => ({ ...r })); LS.del('mc:duty'); renderDuty(); render(); });
+$('dutyReset').addEventListener('click', () => { duty = C.DEFAULT_DUTY.map(r => ({ ...r })); LS.del('mc:duty'); renderDuty(); render(); prefsChanged(); });
 
 $('settingsBtn').addEventListener('click', () => {
   renderDuty();
-  $('acctInfo').textContent = user ? `Signed in as ${user.email}.` : notConfigured ? 'Cloud saving is not set up.' : 'Not signed in on this device.';
+  $('acctInfo').textContent = user
+    ? `Signed in as ${user.email || user.displayName || 'your account'}${isOwnerUser() ? ' (owner)' : member ? '' : member === false ? ' (waiting for approval)' : ''}.`
+    : notConfigured ? 'Cloud saving is not set up.' : 'Not signed in on this device.';
   $('signOutBtn').hidden = !user;
   $('ver').textContent = VERSION;
   $('setDlg').showModal();
 });
 $('setClose').addEventListener('click', () => $('setDlg').close());
 $('setDlg').addEventListener('close', runPendingUpdate);
-$('signOutBtn').addEventListener('click', async () => {
-  if (!confirm('Sign out on this device? Saved items stay safe in the cloud.')) return;
-  LS.del('mc:signed');
-  try { await cloudMod.signOut(); } catch { /* still reload */ }
-  persistNow();
-  location.reload();
-});
+$('signOutBtn').addEventListener('click', doSignOut);
 $('clearRates').addEventListener('click', () => { clearCache(); R = { loading: true, date: null }; loadRates(); toast('Saved gold rates cleared'); });
 $('saveDlg').addEventListener('close', runPendingUpdate);
 
@@ -860,7 +1103,7 @@ if ('serviceWorker' in navigator) {
 
 // ---------- start ----------
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState !== 'visible') { persistNow(); return; }
+  if (document.visibilityState !== 'visible') { persistNow(); if (cloudMod) cloudMod.flush().catch(() => {}); return; }
   if (!S.date) loadRates(); // refresh "today" (cached for 10 minutes)
 });
 addEventListener('pagehide', persistNow);
@@ -868,8 +1111,9 @@ addEventListener('pagehide', persistNow);
 buildPurity();
 render();
 loadRates();
-setView(location.hash === '#saved' ? 'saved' : 'calc', false);
-if (LS.get('mc:signed', 0) && location.hash !== '#saved') {
+setView(viewFromHash(), false);
+finishRedirect();
+if (LS.get('mc:signed', 0) && view === 'calc') {
   // Signed in before: warm up cloud data in the background so Saved opens instantly.
   (window.requestIdleCallback || (f => setTimeout(f, 1500)))(() => cloud().catch(() => {}));
 }

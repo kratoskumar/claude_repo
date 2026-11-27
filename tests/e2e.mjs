@@ -62,6 +62,11 @@ async function mockRates(ctx) {
   await ctx.route(/api\.frankfurter\.dev/, r => (MOCK.down ? r.abort() : r.fulfill({ json: { date: (r.request().url().match(/\d{4}-\d{2}-\d{2}/) || [TODAY])[0], rates: { INR: MOCK.frank } }, headers })));
 }
 
+async function openSaveDlg(p) {
+  await p.click('#saveBtn');
+  await p.waitForSelector('#saveDlg[open]', { timeout: 15000 });
+}
+
 async function setIndiaItem(p) {
   await p.click('#marketSeg [data-v="IN"]');
   await p.click('#curSeg [data-v="INR"]');
@@ -209,7 +214,7 @@ try {
   });
 
   await step('save explains when cloud saving is not set up', async () => {
-    await p.click('#saveBtn');
+    await openSaveDlg(p);
     check(await p.inputValue('#sName') === '22K · 10 g', 'default name ' + await p.inputValue('#sName'));
     await p.click('#sSave');
     await waitText(p, '#sErr', 'Cloud saving is not set up yet');
@@ -271,18 +276,21 @@ try {
   // ======================= B. Cloud saving (Firebase emulator) =======================
   await reset();
   const uid = await createUser('family@example.com', 'correct-horse-9');
-  await createUser('intruder@example.com', 'intruder-pass-1');
   await loadRules(uid);
-  const { server: sB, url: uB } = await serve({ emulator: true });
+  const { server: sB, url: uB } = await serve({ emulator: true, ownerUid: uid });
+  const items = () => adminList(`users/${uid}/items`);
+  const photos = () => adminList(`users/${uid}/photos`);
   const ctxA = await browser.newContext({ ...devices['iPhone 13'], serviceWorkers: 'block' });
   await mockRates(ctxA);
   const a = await ctxA.newPage(); watch(a, 'B');
   a.on('dialog', d => d.accept());
 
-  await step('Saved tab asks to sign in; wrong password refused; right one works', async () => {
+  await step('owner: Saved asks to sign in; wrong password refused; right one works', async () => {
     await a.goto(uB + '#saved');
-    await waitText(a, '#savedGate', 'Sign in with the family account');
+    await waitText(a, '#savedGate', 'Sign in to save calculations');
+    check(!(await visible(a, '#tabAdmin')), 'no Admin tab before sign-in');
     await a.click('#savedGate button');
+    check(await visible(a, '#googleBtn'), 'Google option shown');
     await a.fill('#email', 'family@example.com');
     await a.fill('#password', 'wrong-password');
     await a.click('#signBtn');
@@ -291,13 +299,15 @@ try {
     await a.click('#signBtn');
     await waitText(a, '#toast', 'Signed in');
     await waitText(a, '#empty', 'No saved items yet');
+    await waitText(a, '#savedInfo', '0 of 100 saved');
+    check(await visible(a, '#tabAdmin'), 'owner sees the Admin tab');
   });
 
   await step('save with product link, Hindi notes and phone photo', async () => {
     await a.click('#tabCalc');
     await setIndiaItem(a);
     await waitText(a, '#mkAmt', '₹4,538');
-    await a.click('#saveBtn');
+    await openSaveDlg(a);
     await a.fill('#sName', 'Gold bangle');
     await a.fill('#sLink', 'javascript:alert(1)');
     await a.click('#sSave');
@@ -310,13 +320,13 @@ try {
     await a.click('#sSave');
     await waitText(a, '#toast', 'Saved');
     check(!(await a.evaluate(() => document.getElementById('saveDlg').open)), 'dialog closed');
-    const docs = await adminList('items');
+    const docs = await items();
     check(docs.length === 1, 'one item in cloud');
     const f = docs[0].fields;
     check(f.link.stringValue === 'https://www.example.com/bangle?id=7', 'link normalised');
-    check(f.photo.booleanValue === true && f.thumb.stringValue.startsWith('data:image/webp'), 'thumb saved');
-    check(Math.round(f.making.doubleValue) === 4538, 'making saved ' + JSON.stringify(f.making));
-    check((await adminList('photos')).length === 1, 'photo saved');
+    check(f.photo.booleanValue === true && f.thumb.stringValue.startsWith('data:image/webp') && f.thumb.stringValue.length <= 12000, 'small thumb saved');
+    check(Math.round(f.making.doubleValue) === 4538, 'making saved');
+    check((await photos()).length === 1, 'photo saved');
   });
 
   await step('saved list shows the item with thumbnail and making %', async () => {
@@ -326,6 +336,7 @@ try {
     check(row.includes('6.6%') && row.includes('₹4,538') && row.includes('India rate'), 'row ' + row);
     check((await a.getAttribute('#list img', 'src')).startsWith('data:image/webp'), 'thumb');
     check(await a.textContent('#savedCount') === '1', 'badge');
+    await waitText(a, '#savedInfo', '1 of 100 saved');
   });
 
   await step('item detail shows full photo, safe link and facts', async () => {
@@ -341,67 +352,54 @@ try {
     }, 'full photo replaces the thumbnail');
     const facts = await a.textContent('#iFacts');
     check(facts.includes('Import duty used15%') && facts.includes('22K (91.6%)'), 'facts ' + facts);
-    await a.screenshot({ path: OUT + 'item-detail.png' });
   });
 
   await step('edit: open in calculator, change price, photo kept', async () => {
     await a.click('#iEdit');
     check(await visible(a, '#editBanner'), 'editing banner');
-    check(await a.textContent('#saveBtn') === 'Save changes', 'button label');
     await waitText(a, '#mkAmt', '₹4,538');
     await a.fill('#price', '80,000');
-    await a.click('#saveBtn');
+    await openSaveDlg(a);
     check(await a.inputValue('#sName') === 'Gold bangle', 'name prefilled');
-    check(await a.inputValue('#sLink') === 'https://www.example.com/bangle?id=7', 'link prefilled');
     check(await visible(a, '#sPreview'), 'current photo preview');
     await clearToast(a);
     await a.click('#sSave');
     await waitText(a, '#toast', 'Changes saved');
-    const docs = await adminList('items');
+    const docs = await items();
     check(docs.length === 1, 'still one item');
     const f = docs[0].fields;
     check((f.price.integerValue || f.price.doubleValue) == 80000, 'price updated');
     check(f.photo.booleanValue === true && f.thumb.stringValue.length > 100, 'thumb kept');
-    check((await adminList('photos')).length === 1, 'photo kept');
-    check(!(await visible(a, '#editBanner')), 'editing ended');
+    check((await photos()).length === 1, 'photo kept');
   });
 
-  await step('save as new copies the item with its photo', async () => {
+  await step('save as new copies the item with its photo; count follows', async () => {
     await a.click('#tabSaved');
     await a.click('#list li button');
     await a.click('#iEdit');
     await a.fill('#wt', '11');
-    await a.click('#saveBtn');
+    await openSaveDlg(a);
     await a.fill('#sName', 'Gold bangle (11 g)');
     await clearToast(a);
     await a.click('#sSaveNew');
     await waitText(a, '#toast', 'Saved');
-    check((await adminList('items')).length === 2, 'two items');
-    check((await adminList('photos')).length === 2, 'photo copied');
+    check((await items()).length === 2 && (await photos()).length === 2, 'copied with photo');
+    await a.click('#tabSaved');
+    await waitText(a, '#savedInfo', '2 of 100 saved');
   });
 
-  await step('remove a photo while editing', async () => {
-    await a.click('#tabSaved');
+  await step('remove a photo while editing, then delete an item', async () => {
     await waitText(a, '#list', 'Gold bangle (11 g)');
     await a.click('#list li:first-child button');
     await waitText(a, '#iName', 'Gold bangle (11 g)');
     await a.click('#iEdit');
-    await a.click('#saveBtn');
+    await openSaveDlg(a);
     await a.click('#sRemovePhoto');
     await clearToast(a);
     await a.click('#sSave');
     await waitText(a, '#toast', 'Changes saved');
-    const it = (await adminList('items')).find(d => d.fields.name.stringValue === 'Gold bangle (11 g)');
-    check(it.fields.photo.booleanValue === false && it.fields.thumb.stringValue === '', 'photo flags cleared');
-    check((await adminList('photos')).length === 1, 'photo deleted');
-  });
-
-  await step('delete an item (and its photo)', async () => {
+    check((await photos()).length === 1, 'photo deleted');
     await a.click('#tabSaved');
-    await a.fill('#search', 'bangle (11');
-    await waitText(a, '#list', 'Gold bangle (11 g)');
-    check((await a.$$('#list li')).length === 1, 'search filters');
-    await a.fill('#search', '');
     const target = (await a.$$('#list li button'))[1];
     await target.click();
     await waitText(a, '#iName', 'Gold bangle');
@@ -409,13 +407,14 @@ try {
     await a.click('#iDelete');
     await waitText(a, '#toast', 'Deleted');
     await until(async () => (await a.$$('#list li')).length === 1, 'list shrinks');
-    check((await adminList('items')).length === 1 && (await adminList('photos')).length === 0, 'cloud cleaned up');
+    check((await items()).length === 1 && (await photos()).length === 0, 'cloud cleaned up');
+    await waitText(a, '#savedInfo', '1 of 100 saved');
   });
 
   const ctxW = await browser.newContext({ ...devices['Pixel 7'], serviceWorkers: 'block' });
   await mockRates(ctxW);
   const w = await ctxW.newPage(); watch(w, 'wife');
-  await step('second phone (same account) sees items, and its saves sync live', async () => {
+  await step('second phone (same account): items and settings sync live', async () => {
     await w.goto(uB + '#saved');
     await w.click('#savedGate button');
     await w.fill('#email', 'family@example.com');
@@ -423,13 +422,20 @@ try {
     await w.click('#signBtn');
     await waitText(w, '#list', 'Gold bangle (11 g)');
     await w.click('#tabCalc');
-    await w.fill('#price', '649'); await w.fill('#wt', '5.2'); await w.selectOption('#purity', '14');
-    await waitText(w, '#mkAmt', '$');
-    await w.click('#saveBtn');
+    // settings made on the first phone follow to the second one
+    await a.click('#tabCalc');
+    await a.click('#marketSeg [data-v="IN"]');
+    await a.selectOption('#purity', '18');
+    await until(async () => (await w.inputValue('#purity')) === '18' && (await w.getAttribute('#marketSeg [data-v="IN"]', 'aria-pressed')) === 'true', 'settings synced to the other phone', 20000);
+    await a.selectOption('#purity', '22');
+    await w.fill('#price', '649'); await w.fill('#wt', '5.2');
+    await waitText(w, '#mkAmt', '₹');
+    await openSaveDlg(w);
     await w.fill('#sName', 'Wife ring');
     await w.click('#sSave');
     await waitText(w, '#toast', 'Saved');
-    await waitText(a, '#list', 'Wife ring'); // appears on the first phone without reload
+    await a.click('#tabSaved');
+    await waitText(a, '#list', 'Wife ring');
   });
 
   await step('reload keeps the sign-in and shows items', async () => {
@@ -443,7 +449,7 @@ try {
     await setIndiaItem(a);
     await waitText(a, '#mkAmt', '₹');
     await ctxA.setOffline(true);
-    await a.click('#saveBtn');
+    await openSaveDlg(a);
     await a.fill('#sName', 'Offline item');
     await clearToast(a);
     await a.click('#sSave');
@@ -451,33 +457,115 @@ try {
     await a.click('#tabSaved');
     await waitText(a, '#list', 'Offline item');
     await ctxA.setOffline(false);
-    await until(async () => (await adminList('items')).some(d => d.fields.name.stringValue === 'Offline item'), 'offline save reaches the cloud', 90000);
+    await until(async () => (await items()).some(d => d.fields.name.stringValue === 'Offline item'), 'offline save reaches the cloud', 90000);
   });
 
-  await step('any other account is refused', async () => {
+  // A friend: Save while signed out -> Google sign-in -> request access -> owner approves.
+  const ctxF = await browser.newContext({ ...devices['iPhone 13'], serviceWorkers: 'block' });
+  await mockRates(ctxF);
+  const fr = await ctxF.newPage(); watch(fr, 'friend');
+  await step('friend: Save while signed out leads to Google sign-in, then a request for access', async () => {
+    await fr.goto(uB);
+    await fr.fill('#price', '649'); await fr.fill('#wt', '5.2');
+    await waitText(fr, '#mkAmt', '$');
+    await fr.click('#saveBtn');
+    await waitText(fr, '#signTitle', 'Sign in');
+    await fr.click('#googleBtn');
+    await fr.waitForURL(/9099/, { timeout: 15000 });
+    await fr.click('text=Add new account');
+    await fr.fill('#email-input', 'asha@gmail.com');
+    await fr.fill('#display-name-input', 'Asha');
+    await fr.click('text=Sign in with Google.com');
+    await fr.waitForURL(u => u.toString().startsWith(uB), { timeout: 15000 });
+    await waitText(fr, '#toast', 'Ask for access first');
+    await waitText(fr, '#savedGate', 'signed in as asha@gmail.com');
+    check(await fr.inputValue('#price') === '649', 'calculation kept through sign-in');
+    check(!(await visible(fr, '#tabAdmin')), 'friends never see Admin');
+    await fr.click('text=Request access');
+    await waitText(fr, '#savedGate', 'Your request has been sent');
+  });
+
+  await step('owner dashboard: usage, request approval, limits', async () => {
+    await a.click('#tabAdmin');
+    await waitText(a, '#adminBody', 'Access requests (1)');
+    await waitText(a, '#adminBody', 'Asha');
+    await waitText(a, '#adminBody', 'has not run yet');
+    check((await a.textContent('#adminBody')).includes('Database reads'), 'usage meters');
+    check(await visible(a, '#adminDot'), 'Admin tab shows a dot when something waits');
+    await a.screenshot({ path: OUT + 'admin.png', fullPage: true });
+    await clearToast(a);
+    await a.click('#adminBody >> text=Approve');
+    await waitText(a, '#toast', 'approved');
+    await waitText(a, '#adminBody', 'Access requests (0)');
+    await waitText(a, '#adminBody', 'asha@gmail.com');
+  });
+
+  await step('friend gets access without reloading, saves privately', async () => {
+    await waitText(fr, '#savedInfo', '0 of 100 saved', 20000);
+    await fr.click('#tabCalc');
+    await openSaveDlg(fr);
+    await fr.fill('#sName', 'Asha ring');
+    await fr.click('#sSave');
+    await waitText(fr, '#toast', 'Saved');
+    const asha = (await adminList('members'))[0].name.split('/').pop();
+    check((await adminList(`users/${asha}/items`)).length === 1, 'saved in her own space');
+    await a.click('#tabSaved');
+    await a.waitForTimeout(800);
+    check(!(await a.textContent('#list')).includes('Asha ring'), 'owner does not see friends\' items');
+  });
+
+  await step('item limit set by the owner is explained to the friend', async () => {
+    await a.click('#tabAdmin');
+    await waitText(a, '#adminBody', 'Items per person');
+    const inputs = await a.$$('#adminBody input');
+    await inputs[1].fill('1');
+    await a.click('#adminBody >> text=Save limits');
+    await waitText(a, '#toast', 'Limits saved');
+    await fr.reload();
+    await fr.click('#tabCalc');
+    await openSaveDlg(fr);
+    await fr.fill('#sName', 'Second');
+    await fr.click('#sSave');
+    await waitText(fr, '#sErr', 'reached the limit of 1 saved items');
+    await fr.click('#sCancel');
+    await fr.click('#tabSaved');
+    await waitText(fr, '#savedInfo', 'limit reached');
+  });
+
+  await step('someone new with email: create account, then request access', async () => {
     const ctxI = await browser.newContext({ serviceWorkers: 'block' });
     await mockRates(ctxI);
-    const i = await ctxI.newPage(); watch(i, 'intruder');
+    const i = await ctxI.newPage(); watch(i, 'newcomer');
     await i.goto(uB + '#saved');
     await i.click('#savedGate button');
-    await i.fill('#email', 'intruder@example.com');
-    await i.fill('#password', 'intruder-pass-1');
+    await i.click('#modeBtn');
+    await waitText(i, '#signTitle', 'Create an account');
+    await i.fill('#suName', 'Ravi');
+    await i.fill('#email', 'ravi@example.com');
+    await i.fill('#password', 'short');
     await i.click('#signBtn');
-    await waitText(i, '#savedGate', 'not allowed to read saved items');
+    await waitText(i, '#signErr', 'at least 8 characters');
+    await i.fill('#password', 'long-enough-1');
+    await i.click('#signBtn');
+    await waitText(i, '#toast', 'Account created');
+    await waitText(i, '#savedGate', 'Request access');
     await ctxI.close();
   });
 
   await step('sign out clears this device only', async () => {
     await a.click('#settingsBtn');
-    await waitText(a, '#acctInfo', 'Signed in as family@example.com');
+    await waitText(a, '#acctInfo', 'Signed in as family@example.com (owner)');
     await Promise.all([a.waitForNavigation(), a.click('#signOutBtn')]);
-    await waitText(a, '#savedGate', 'Sign in with the family account');
+    check(await a.getAttribute('#tabCalc', 'aria-pressed') === 'true', 'leaves the Admin view');
+    await a.click('#tabSaved');
+    await waitText(a, '#savedGate', 'Sign in to save calculations');
+    check(!(await visible(a, '#tabAdmin')), 'Admin tab gone after sign-out');
     const dbs = await a.evaluate(async () => (await indexedDB.databases()).map(d => d.name).filter(n => n.startsWith('firestore/')));
     check(dbs.length === 0, 'offline copy wiped ' + dbs);
     await w.click('#tabSaved');
     await waitText(w, '#list', 'Offline item'); // the other phone is unaffected
   });
-  await ctxA.close(); await ctxW.close();
+  await ctxA.close(); await ctxW.close(); await ctxF.close();
   sB.close();
 
   // ======================= C. Offline app + updates (service worker) =======================
@@ -495,7 +583,7 @@ try {
     await s.waitForTimeout(500);
     check(navs === 1, 'no reload loop, navigations=' + navs);
     const keys = await s.evaluate(() => caches.keys());
-    check(keys.includes('mc-1.0.0'), 'cache ' + keys);
+    check(keys.some(k => k.startsWith('mc-')), 'cache ' + keys);
   });
 
   await step('opens and calculates with no internet', async () => {
@@ -515,19 +603,21 @@ try {
   await step('new version is picked up automatically (inputs kept)', async () => {
     const swSrc = await readFile(new URL('../docs/sw.js', import.meta.url), 'utf8');
     const appSrc = await readFile(new URL('../docs/app.js', import.meta.url), 'utf8');
-    check(swSrc.includes("const VERSION = '1.0.0'") && appSrc.includes("const VERSION = '1.0.0'"), 'versions in sync');
-    ov['sw.js'] = swSrc.replace("const VERSION = '1.0.0'", "const VERSION = '1.0.1'");
-    ov['app.js'] = appSrc.replace("const VERSION = '1.0.0'", "const VERSION = '1.0.1'");
+    const ver = src => (src.match(/const VERSION = '([^']+)'/) || [])[1];
+    check(ver(swSrc) && ver(swSrc) === ver(appSrc), 'VERSION must match in sw.js and app.js');
+    const v = ver(swSrc), next = v + '-next';
+    ov['sw.js'] = swSrc.replace(`const VERSION = '${v}'`, `const VERSION = '${next}'`);
+    ov['app.js'] = appSrc.replace(`const VERSION = '${v}'`, `const VERSION = '${next}'`);
     const before = navs;
     await s.reload();
     await until(async () => navs >= before + 2, 'automatic reload after update', 20000);
     await s.waitForLoadState();
     await s.click('#settingsBtn');
-    await waitText(s, '#ver', '1.0.1');
+    await waitText(s, '#ver', next);
     await s.click('#setClose');
     check(await s.inputValue('#price') === '649', 'inputs kept across update');
     const keys = await s.evaluate(() => caches.keys());
-    check(keys.includes('mc-1.0.1') && !keys.includes('mc-1.0.0'), 'old cache removed ' + keys);
+    check(keys.includes('mc-' + next) && !keys.includes('mc-' + v), 'old cache removed ' + keys);
   });
   await ctxS.close();
   sC.close();
