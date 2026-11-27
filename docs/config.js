@@ -10,7 +10,7 @@ export const FIREBASE = {
 
 // The owner's User UID (Firebase console > Authentication > Users). Public: it only decides
 // who sees the Admin tab; the security rules (filled from this value on deploy) enforce access.
-export const OWNER_UID = '';
+export const OWNER_UID = 'YDY4s5ADEHayvyCzu9fRrefLJ4A2';
 
 // Main address of the app. When set, copies opened elsewhere (the old GitHub Pages link or
 // the firebaseapp.com address) move to it, so everyone uses one address and one login.
