@@ -5,7 +5,14 @@
 - Live address: **https://mcc.tarveengujral.com**.
 - `.github/workflows/deploy.yml` deploys to Firebase Hosting (and publishes the security rules)
   when changes to `docs/`, `firebase/`, `firebase.json` or the workflow merge into `main`.
-- `.github/workflows/monitor.yml` runs `scripts/monitor.mjs` hourly to check usage against the free limits.
+- `.github/workflows/monitor.yml` runs `scripts/monitor.mjs` hourly to check usage against the free limits,
+  the certificate and domain expiry. It pushes changes to the owner's phone (ntfy) and pings healthchecks.io.
+- The command center that runs outside Google is planned in `command-center/PLAN.md` (phases 1–4).
+
+## The repository is public
+- Logs, issues, pushes and commit messages must never carry names, emails or user IDs. Pass anything
+  logged or sent from the monitor through `scrub()` in `scripts/monitor.mjs`. Alerts show counts only.
+- The ntfy topic, healthchecks.io ping address and any tokens are GitHub secrets, never files in the repo.
 
 ## Versioning
 - Every change to `docs/` must bump `VERSION` in **both** `docs/sw.js` and `docs/app.js`,
