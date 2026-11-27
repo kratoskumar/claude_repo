@@ -1,6 +1,6 @@
 // Offline support. App files are cached per version, so the app opens instantly and offline.
 // IMPORTANT: bump VERSION (and VERSION in app.js) on every change to the app files.
-const VERSION = '1.1.1';
+const VERSION = '1.1.2';
 const CACHE = 'mc-' + VERSION;
 const SDK_PREFIX = 'https://www.gstatic.com/firebasejs/12.19.0/';
 const SDK_CACHE = 'fbsdk-12.19.0';

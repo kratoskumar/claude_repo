@@ -104,6 +104,9 @@ try {
     await p.fill('#other', '40');
     await waitText(p, '#mkAmt', '$374.94');
     check(await p.textContent('#mkPct') === '160.2%', 'pct ' + await p.textContent('#mkPct'));
+    check(await p.textContent('#mkPctBox') === '160.2% of gold value', 'prominent % ' + await p.textContent('#mkPctBox'));
+    check(await p.textContent('#mkGold') === '$234.06', 'gold value tile ' + await p.textContent('#mkGold'));
+    check(await p.textContent('#mkPg') === '$72.10', 'per gram ' + await p.textContent('#mkPg'));
     check((await p.textContent('#mkAlt')).includes('₹31,495'), 'alt ' + await p.textContent('#mkAlt'));
     check(!(await p.isDisabled('#saveBtn')), 'save enabled');
   });

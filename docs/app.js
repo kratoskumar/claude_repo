@@ -7,7 +7,7 @@ if (CANONICAL_HOST && location.hostname !== CANONICAL_HOST && /(\.github\.io|\.f
   location.replace(`https://${CANONICAL_HOST}/${location.hash}`);
 }
 
-const VERSION = '1.1.1';
+const VERSION = '1.1.2';
 const $ = id => document.getElementById(id);
 const today = () => C.localISO();
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -212,6 +212,8 @@ function render() {
     $('mkAlt').textContent = c.fx > 0 ? `≈ ${C.money(C.convert(res.making, cur, alt, c.fx), alt)}` : '';
     $('mkPct').textContent = pctText(res.pct);
     $('mkPg').textContent = C.money(res.perGram, cur);
+    $('mkGold').textContent = C.money(res.gold, cur);
+    $('mkPctBox').classList.remove('empty');
     const rows = [[`Price${c.tax.incl ? '' : ' (before tax)'}`, C.money(c.price, cur)]];
     if (c.tax.incl) {
       rows.push([`− ${S.market === 'IN' ? 'GST' : 'Sales tax'} ${C.plain(c.taxPct, 3)}%`, C.money(res.tax, cur)]);
@@ -234,6 +236,8 @@ function render() {
     $('mkAlt').textContent = hint(res.err, c);
     $('mkPct').textContent = '—';
     $('mkPg').textContent = '—';
+    $('mkGold').textContent = '—';
+    $('mkPctBox').classList.add('empty');
     const msg = problem(res.err, c);
     warn.hidden = !msg;
     warn.textContent = msg || '';

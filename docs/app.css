@@ -109,6 +109,11 @@ input.tiny { width: 84px !important; margin: 0 !important; text-align: right; }
 .headline span { color: var(--muted); font-size: 14px; }
 .headline strong { font-size: 34px; line-height: 1.15; margin-top: 2px; font-variant-numeric: tabular-nums; }
 .headline small { color: var(--muted); font-size: 14px; min-height: 1.2em; }
+.pct-pill { display: inline-flex; align-items: baseline; gap: 6px; margin: 10px 0 0; padding: 6px 16px; border-radius: 999px;
+  background: var(--accent); color: var(--accent-ink); font-size: 14px; font-weight: 600; }
+.pct-pill b { font-size: 24px; font-variant-numeric: tabular-nums; }
+.headline .pct-pill span { color: inherit; font-size: 14px; }
+.pct-pill.empty { background: var(--accent-soft); color: var(--muted); }
 .kpis { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 12px; }
 .kpis div { background: var(--accent-soft); border-radius: 12px; padding: 10px; text-align: center; }
 .kpis b { display: block; font-size: 20px; font-variant-numeric: tabular-nums; }
