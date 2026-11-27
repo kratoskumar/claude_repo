@@ -2,10 +2,10 @@
 // the project); data is protected by the security rules in firebase/firestore.rules.
 // Paste the values from Firebase console > Project settings > Your apps > Web app.
 export const FIREBASE = {
-  apiKey: '',
-  authDomain: '', // must be the hosting address, e.g. 'making-charge.web.app', for Google sign-in
-  projectId: '',
-  appId: ''
+  apiKey: 'AIzaSyCDdWhPFuS24hsY7fYDrAzcZ43bxGl4EsM',
+  authDomain: 'making-charge.web.app', // the hosting address: needed for Google sign-in in home-screen apps
+  projectId: 'making-charge',
+  appId: '1:1000391464579:web:cdcd80526fe33ac80dedb6'
 };
 
 // The owner's User UID (Firebase console > Authentication > Users). Public: it only decides
