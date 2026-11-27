@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://www.gstatic.com; style-src 'self'; img-src 'self' data: blob: https://www.google.com; connect-src 'self' https://www.gstatic.com https://api.gold-api.com https://cdn.jsdelivr.net https://*.currency-api.pages.dev https://api.frankfurter.dev https://*.googleapis.com; object-src 'none'; base-uri 'self'; form-action 'self'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://www.gstatic.com https://apis.google.com; style-src 'self'; img-src 'self' data: blob: https://www.google.com; connect-src 'self' https://www.gstatic.com https://api.gold-api.com https://cdn.jsdelivr.net https://*.currency-api.pages.dev https://api.frankfurter.dev https://*.googleapis.com https://apis.google.com https://www.google.com; frame-src 'self' https://*.firebaseapp.com https://*.web.app; object-src 'none'; base-uri 'self'; form-action 'self'">
 <title>Making Charge Calculator</title>
 <meta name="robots" content="noindex, nofollow">
 <meta name="description" content="Work out jewellery making charges from price, weight and the gold rate, in USD or INR.">
@@ -25,6 +25,7 @@
   <nav class="tabs" aria-label="Views">
     <button type="button" class="tab" id="tabCalc" aria-pressed="true">Calculator</button>
     <button type="button" class="tab" id="tabSaved" aria-pressed="false">Saved <span id="savedCount" class="count" hidden></span></button>
+    <button type="button" class="tab" id="tabAdmin" aria-pressed="false" hidden>Admin <span id="adminDot" class="dot" hidden></span></button>
   </nav>
   <button type="button" class="icon" id="settingsBtn" aria-label="Settings">
     <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.49.49 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.48.48 0 0 0-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96a.49.49 0 0 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32a.49.49 0 0 0-.12-.61l-2.01-1.58zM12 15.6a3.6 3.6 0 1 1 0-7.2 3.6 3.6 0 0 1 0 7.2z"/></svg>
@@ -120,10 +121,15 @@
 <section id="savedView" aria-label="Saved items" hidden>
   <div id="savedGate" class="card center"></div>
   <div id="savedBody" hidden>
+    <p id="savedInfo" class="sub saved-info"></p>
     <input type="search" id="search" placeholder="Search saved items" aria-label="Search saved items">
     <ul id="list" class="list"></ul>
     <p id="empty" class="center sub" hidden>No saved items yet. Use Save on the calculator.</p>
   </div>
+</section>
+
+<section id="adminView" aria-label="Owner dashboard" hidden>
+  <div id="adminBody"></div>
 </section>
 </main>
 
@@ -159,18 +165,28 @@
 <dialog id="signDlg" aria-labelledby="signTitle">
   <form method="dialog" id="signForm" novalidate>
     <h2 id="signTitle">Sign in</h2>
-    <p class="sub">Use the family account to save and see saved items.</p>
+    <p class="sub">Save calculations and see them on all your devices.</p>
+    <button type="button" class="google" id="googleBtn">
+      <svg viewBox="0 0 48 48" width="20" height="20" aria-hidden="true"><path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9.1 3.6l6.8-6.8C35.8 2.4 30.3 0 24 0 14.6 0 6.6 5.4 2.7 13.3l7.9 6.2C12.5 13.6 17.8 9.5 24 9.5z"/><path fill="#4285F4" d="M46.1 24.5c0-1.6-.1-3.1-.4-4.5H24v9h12.4c-.5 2.9-2.2 5.3-4.6 6.9l7.4 5.7c4.3-4 6.9-9.9 6.9-17.1z"/><path fill="#FBBC05" d="M10.5 28.6c-.5-1.4-.8-3-.8-4.6s.3-3.2.8-4.6l-7.9-6.2C1 16.5 0 20.1 0 24s1 7.5 2.7 10.8l7.8-6.2z"/><path fill="#34A853" d="M24 48c6.5 0 11.9-2.1 15.9-5.8l-7.4-5.7c-2.1 1.4-4.8 2.3-8.5 2.3-6.2 0-11.5-4.2-13.4-9.9l-7.9 6.2C6.6 42.6 14.6 48 24 48z"/></svg>
+      Continue with Google
+    </button>
+    <p class="or"><span>or use email</span></p>
+    <label id="nameWrap" hidden>Your name
+      <input id="suName" autocomplete="name" maxlength="60">
+    </label>
     <label>Email
       <input id="email" type="email" autocomplete="username" autocapitalize="off" spellcheck="false" required>
     </label>
     <label>Password
       <input id="password" type="password" autocomplete="current-password" required>
     </label>
+    <p class="sub"><button type="button" class="link" id="forgotBtn">Forgot password?</button></p>
     <p class="warn" id="signErr" hidden></p>
     <div class="actions">
       <button type="submit" class="primary" id="signBtn" value="go">Sign in</button>
       <button type="button" id="signCancel">Cancel</button>
     </div>
+    <p class="sub center"><span id="modeText">New here?</span> <button type="button" class="link" id="modeBtn">Create an account</button></p>
   </form>
 </dialog>
 

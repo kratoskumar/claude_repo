@@ -2,7 +2,7 @@
 import { test, before, after, beforeEach } from 'node:test';
 import { readFileSync } from 'node:fs';
 import { initializeTestEnvironment, assertSucceeds, assertFails } from '@firebase/rules-unit-testing';
-import { doc, setDoc, getDoc, getDocs, deleteDoc, collection, updateDoc } from 'firebase/firestore';
+import { doc, setDoc, getDoc, getDocs, deleteDoc, collection, updateDoc, writeBatch, increment, getCountFromServer, query, where } from 'firebase/firestore';
 
 const OWNER = 'owner-uid-123';
 const source = readFileSync(new URL('../firebase/firestore.rules', import.meta.url), 'utf8');
@@ -24,83 +24,188 @@ const item = (over = {}) => ({
   ...over
 });
 const photo = n => 'data:image/webp;base64,' + 'A'.repeat(n);
-
-const owner = () => env.authenticatedContext(OWNER).firestore();
-const other = () => env.authenticatedContext('someone-else').firestore();
+const as = u => env.authenticatedContext(u).firestore();
 const anon = () => env.unauthenticatedContext().firestore();
+const admin = fn => env.withSecurityRulesDisabled(c => fn(c.firestore()));
+const approve = u => admin(db => setDoc(doc(db, `members/${u}`), { name: u, email: `${u}@x.com`, ts: 1 }));
+const meta = (u, data) => admin(db => setDoc(doc(db, `users/${u}`), { count: 0, ...data }));
 
-test('owner can create, read, list, update and delete items', async () => {
-  const db = owner();
-  await assertSucceeds(setDoc(doc(db, 'items/a'), item()));
-  await assertSucceeds(getDoc(doc(db, 'items/a')));
-  await assertSucceeds(getDocs(collection(db, 'items')));
-  await assertSucceeds(updateDoc(doc(db, 'items/a'), { name: 'Renamed', upd: 1700000000001 }));
-  await assertSucceeds(deleteDoc(doc(db, 'items/a')));
-});
+// Adds an item the way the app does: item + count+1 (+ optional photo) in one batch.
+function addItem(db, u, id, count, data = item(), ph) {
+  const b = writeBatch(db);
+  b.set(doc(db, `users/${u}/items/${id}`), data);
+  b.update(doc(db, `users/${u}`), { count: count + 1, last: id });
+  if (ph) b.set(doc(db, `users/${u}/photos/${id}`), { d: ph });
+  return b.commit();
+}
+function removeItem(db, u, id, count) {
+  const b = writeBatch(db);
+  b.delete(doc(db, `users/${u}/items/${id}`));
+  b.delete(doc(db, `users/${u}/photos/${id}`));
+  b.update(doc(db, `users/${u}`), { count: count - 1, last: id });
+  return b.commit();
+}
 
-test('minimal item (optional fields omitted) and US/USD item are allowed', async () => {
-  const min = item();
-  for (const k of ['link', 'notes', 'other', 'taxIncl', 'taxPct', 'rateManual', 'fx', 'duty', 'perGram', 'preTax', 'thumb', 'photo']) delete min[k];
-  await assertSucceeds(setDoc(doc(owner(), 'items/min'), min));
-  await assertSucceeds(setDoc(doc(owner(), 'items/us'), item({ market: 'US', cur: 'USD', k: 'custom', pf: 0.6, fx: null, making: -5, pct: -1.2 })));
-});
-
-test('other accounts and signed-out visitors are denied everything', async () => {
-  await env.withSecurityRulesDisabled(async c => {
-    await setDoc(doc(c.firestore(), 'items/a'), item());
-    await setDoc(doc(c.firestore(), 'photos/a'), { d: photo(100) });
-  });
-  for (const db of [other(), anon()]) {
-    await assertFails(getDoc(doc(db, 'items/a')));
-    await assertFails(getDocs(collection(db, 'items')));
-    await assertFails(setDoc(doc(db, 'items/b'), item()));
-    await assertFails(deleteDoc(doc(db, 'items/a')));
-    await assertFails(getDoc(doc(db, 'photos/a')));
-    await assertFails(setDoc(doc(db, 'photos/b'), { d: photo(100) }));
-    await assertFails(deleteDoc(doc(db, 'photos/a')));
+test('signed-in stranger can only ask for access', async () => {
+  const db = as('stranger');
+  await assertSucceeds(setDoc(doc(db, 'requests/stranger'), { name: 'S', email: 's@x.com', ts: 1 }));
+  await assertSucceeds(getDoc(doc(db, 'requests/stranger')));
+  await assertSucceeds(getDoc(doc(db, 'members/stranger'))); // to learn it is not approved yet
+  await assertFails(setDoc(doc(db, 'requests/other'), { name: 'S', email: 's@x.com', ts: 1 }));
+  await assertFails(setDoc(doc(db, 'requests/stranger'), { name: 'S', email: 's@x.com', ts: 1, admin: true }));
+  await assertFails(setDoc(doc(db, 'users/stranger'), { count: 0 }));
+  await assertFails(setDoc(doc(db, 'members/stranger'), { name: 'S', email: 's@x.com', ts: 1 }));
+  await assertFails(getDocs(collection(db, 'requests')));
+  await assertFails(getDocs(collection(db, 'members')));
+  await assertFails(getDoc(doc(db, 'config/app')));
+  await assertFails(setDoc(doc(db, 'stats/2026-11-27'), { opens: 1 }));
+  for (const d of [anon()]) {
+    await assertFails(setDoc(doc(d, 'requests/x'), { name: 'S', email: 's', ts: 1 }));
+    await assertFails(getDoc(doc(d, 'members/x')));
   }
 });
 
-test('invalid item data is rejected', async () => {
-  const db = owner();
-  const bad = [
-    item({ extra: 1 }),
-    item({ name: '' }),
-    item({ name: 'x'.repeat(121) }),
-    item({ market: 'UK' }),
-    item({ cur: 'EUR' }),
-    item({ price: 0 }),
-    item({ price: -1 }),
-    item({ price: '100' }),
-    item({ wt: 0 }),
-    item({ pf: 1.5 }),
-    item({ date: 'yesterday' }),
-    item({ taxPct: 60 }),
-    item({ other: -1 }),
-    item({ fx: 0 }),
-    item({ link: 'x'.repeat(2001) }),
-    item({ thumb: 'x'.repeat(40001) }),
-    item({ photo: 'yes' })
-  ];
-  const noName = item(); delete noName.name;
-  const noTs = item(); delete noTs.ts;
-  for (const d of [...bad, noName, noTs]) await assertFails(setDoc(doc(db, 'items/x'), d));
+test('owner approves, declines and sets limits; members cannot', async () => {
+  await admin(db => setDoc(doc(db, 'requests/friend'), { name: 'F', email: 'f@x.com', ts: 1 }));
+  const o = as(OWNER);
+  await assertSucceeds(getDocs(collection(o, 'requests')));
+  const b = writeBatch(o);
+  b.set(doc(o, 'members/friend'), { name: 'F', email: 'f@x.com', ts: 2 });
+  b.delete(doc(o, 'requests/friend'));
+  await assertSucceeds(b.commit());
+  await assertSucceeds(setDoc(doc(o, 'config/app'), { itemLimit: 100, maxMembers: 25 }));
+  await assertFails(setDoc(doc(o, 'config/app'), { itemLimit: 0, maxMembers: 25 }));
+  await assertFails(setDoc(doc(o, 'config/app'), { itemLimit: 100.5, maxMembers: 25 }));
+  await assertFails(setDoc(doc(o, 'members/x'), { name: 'X', role: 'owner' }));
+  const f = as('friend');
+  await assertSucceeds(getDoc(doc(f, 'config/app')));
+  await assertFails(setDoc(doc(f, 'config/app'), { itemLimit: 1000, maxMembers: 25 }));
+  await assertFails(setDoc(doc(f, 'members/pal'), { name: 'P', email: 'p', ts: 1 }));
+  await assertFails(setDoc(doc(f, 'requests/friend'), { name: 'F', email: 'f', ts: 1 })); // already a member
+  await assertSucceeds(deleteDoc(doc(o, 'members/friend')));
+  await assertFails(getDoc(doc(f, 'config/app'))); // removed members lose access
 });
 
-test('photos: valid allowed; oversized, non-image or extra fields rejected', async () => {
-  const db = owner();
-  await assertSucceeds(setDoc(doc(db, 'photos/a'), { d: photo(600000) }));
-  await assertSucceeds(setDoc(doc(db, 'photos/j'), { d: 'data:image/jpeg;base64,/9j/4AAQSkZJRg==' }));
-  await assertSucceeds(getDoc(doc(db, 'photos/a')));
-  await assertFails(setDoc(doc(db, 'photos/b'), { d: photo(900000) }));
-  await assertFails(setDoc(doc(db, 'photos/c'), { d: 'data:image/svg+xml;base64,PHN2Zz4=' }));
-  await assertFails(setDoc(doc(db, 'photos/d'), { d: 'data:text/html;base64,PGI+' }));
-  await assertFails(setDoc(doc(db, 'photos/e'), { d: photo(10), x: 1 }));
-  await assertFails(setDoc(doc(db, 'photos/f'), { d: 'data:image/webp;base64,<script>' }));
-  await assertSucceeds(deleteDoc(doc(db, 'photos/a')));
+test('member: own space, add/edit/delete items with photos', async () => {
+  await approve('a');
+  const db = as('a');
+  await assertSucceeds(setDoc(doc(db, 'users/a'), { count: 0, set: { market: 'IN', k: '22' }, seen: 5 }));
+  await assertFails(setDoc(doc(db, 'users/b'), { count: 0 }));
+  await assertSucceeds(addItem(db, 'a', 'i1', 0, item(), photo(1000)));
+  await assertSucceeds(getDoc(doc(db, 'users/a/photos/i1')));
+  await assertSucceeds(getDocs(collection(db, 'users/a/items')));
+  await assertSucceeds(updateDoc(doc(db, 'users/a/items/i1'), { name: 'Renamed', upd: 2 }));
+  await assertSucceeds(setDoc(doc(db, 'users/a/photos/i1'), { d: photo(2000) }));
+  await assertSucceeds(updateDoc(doc(db, 'users/a'), { set: { market: 'US', duty: [{ from: '2000-01-01', pct: 15 }] }, seen: 9 }));
+  await assertSucceeds(removeItem(db, 'a', 'i1', 1));
+  const m = await getDoc(doc(db, 'users/a'));
+  if (m.data().count !== 0) throw new Error('count should be 0');
 });
 
-test('no other collections are reachable', async () => {
-  await assertFails(setDoc(doc(owner(), 'settings/x'), { a: 1 }));
-  await assertFails(getDoc(doc(owner(), 'users/x')));
+test('item cap cannot be bypassed', async () => {
+  await approve('a');
+  await admin(db => setDoc(doc(db, 'config/app'), { itemLimit: 2, maxMembers: 25 }));
+  await meta('a');
+  const db = as('a');
+  // item without count, count without item, wrong last id
+  await assertFails(setDoc(doc(db, 'users/a/items/x'), item()));
+  await assertFails(updateDoc(doc(db, 'users/a'), { count: 1, last: 'ghost' }));
+  const b = writeBatch(db);
+  b.set(doc(db, 'users/a/items/x'), item());
+  b.update(doc(db, 'users/a'), { count: 1, last: 'other' });
+  await assertFails(b.commit());
+  await assertSucceeds(addItem(db, 'a', 'i1', 0));
+  await assertSucceeds(addItem(db, 'a', 'i2', 1));
+  await assertFails(addItem(db, 'a', 'i3', 2)); // over the limit of 2
+  // lowering the count without deleting, or deleting without lowering it
+  await assertFails(updateDoc(doc(db, 'users/a'), { count: 1, last: 'i1' }));
+  await assertFails(deleteDoc(doc(db, 'users/a/items/i1')));
+  await assertFails(updateDoc(doc(db, 'users/a'), { count: 0 }));
+  await assertFails(updateDoc(doc(db, 'users/a'), { count: 5, last: 'i1' }));
+  await assertSucceeds(removeItem(db, 'a', 'i1', 2));
+  await assertSucceeds(addItem(db, 'a', 'i3', 1));
+});
+
+test('invalid data is rejected', async () => {
+  await approve('a');
+  await meta('a');
+  const db = as('a');
+  const bad = [item({ extra: 1 }), item({ name: '' }), item({ market: 'UK' }), item({ price: -1 }), item({ pf: 1.5 }),
+    item({ date: 'today' }), item({ taxPct: 60 }), item({ thumb: 'x'.repeat(16001) }), item({ link: 'x'.repeat(2001) })];
+  for (const d of bad) await assertFails(addItem(db, 'a', 'bad', 0, d));
+  await assertSucceeds(addItem(db, 'a', 'ok', 0));
+  await assertFails(setDoc(doc(db, 'users/a/photos/ok'), { d: photo(300000) }));
+  await assertFails(setDoc(doc(db, 'users/a/photos/ok'), { d: 'data:image/svg+xml;base64,PHN2Zz4=' }));
+  await assertFails(setDoc(doc(db, 'users/a/photos/nothing'), { d: photo(10) })); // no such item
+  await assertFails(updateDoc(doc(db, 'users/a'), { set: { evil: 'x'.repeat(10) } }));
+  await assertFails(updateDoc(doc(db, 'users/a'), { admin: true }));
+});
+
+test('people cannot see each other\'s data; owner sees only counts', async () => {
+  await approve('a'); await approve('b');
+  await meta('a', { count: 1, last: 'i1' });
+  await admin(async db => { await setDoc(doc(db, 'users/a/items/i1'), item()); await setDoc(doc(db, 'users/a/photos/i1'), { d: photo(10) }); });
+  const b = as('b');
+  await assertFails(getDoc(doc(b, 'users/a')));
+  await assertFails(getDocs(collection(b, 'users/a/items')));
+  await assertFails(getDoc(doc(b, 'users/a/photos/i1')));
+  await assertFails(setDoc(doc(b, 'users/a/items/z'), item()));
+  await assertFails(getDocs(collection(b, 'users')));
+  const o = as(OWNER);
+  await assertSucceeds(getDoc(doc(o, 'users/a')));
+  await assertSucceeds(getDocs(collection(o, 'users')));
+  await assertFails(getDocs(collection(o, 'users/a/items')));
+  await assertFails(getDoc(doc(o, 'users/a/photos/i1')));
+  for (const d of [anon(), as('stranger')]) {
+    await assertFails(getDoc(doc(d, 'users/a')));
+    await assertFails(getDocs(collection(d, 'users/a/items')));
+  }
+});
+
+test('owner uses the app like any member without a member record', async () => {
+  const o = as(OWNER);
+  await assertSucceeds(setDoc(doc(o, `users/${OWNER}`), { count: 0 }));
+  await assertSucceeds(addItem(o, OWNER, 'mine', 0, item(), photo(100)));
+});
+
+test('usage counters: members can only add; only owner reads', async () => {
+  await approve('a');
+  const db = as('a');
+  await assertSucceeds(setDoc(doc(db, 'stats/2026-11-27'), { opens: increment(1), reads: increment(40), kb: increment(12) }, { merge: true }));
+  await assertSucceeds(setDoc(doc(db, 'stats/2026-11-27'), { opens: increment(1), errQuota: increment(1) }, { merge: true }));
+  await assertFails(setDoc(doc(db, 'stats/2026-11-27'), { opens: increment(-1) }, { merge: true }));
+  await assertFails(setDoc(doc(db, 'stats/2026-11-27'), { opens: 0 }, { merge: true }));
+  await assertFails(setDoc(doc(db, 'stats/2026-11-27'), { hack: increment(1) }, { merge: true }));
+  await assertFails(setDoc(doc(db, 'stats/2026-11-27'), { reads: increment(50000) }, { merge: true }));
+  await assertFails(setDoc(doc(db, 'stats/not-a-day'), { opens: increment(1) }, { merge: true }));
+  await assertFails(getDoc(doc(db, 'stats/2026-11-27')));
+  await assertFails(setDoc(doc(as('stranger'), 'stats/2026-11-27'), { opens: increment(1) }, { merge: true }));
+  const o = as(OWNER);
+  const s = await getDoc(doc(o, 'stats/2026-11-27'));
+  if (s.data().opens !== 2 || s.data().reads !== 40) throw new Error('counters ' + JSON.stringify(s.data()));
+});
+
+test('daily active markers', async () => {
+  await approve('a');
+  const db = as('a');
+  await assertSucceeds(setDoc(doc(db, 'active/2026-11-27_a'), { d: '2026-11-27', u: 'a' }));
+  await assertFails(setDoc(doc(db, 'active/2026-11-27_b'), { d: '2026-11-27', u: 'b' }));
+  await assertFails(setDoc(doc(db, 'active/2026-11-27_a'), { d: '2026-11-27', u: 'a' })); // no overwrite
+  await assertFails(setDoc(doc(as('stranger'), 'active/2026-11-27_stranger'), { d: '2026-11-27', u: 'stranger' }));
+  await assertFails(getDoc(doc(db, 'active/2026-11-27_a')));
+  const n = await getCountFromServer(query(collection(as(OWNER), 'active'), where('d', '==', '2026-11-27')));
+  if (n.data().count !== 1) throw new Error('count');
+});
+
+test('purge requests, monitor status and other paths', async () => {
+  const o = as(OWNER);
+  await assertSucceeds(setDoc(doc(o, 'purge/a'), { ts: 1 }));
+  await assertFails(setDoc(doc(as('a'), 'purge/b'), { ts: 1 }));
+  await admin(db => setDoc(doc(db, 'monitor/status'), { ok: true }));
+  await assertSucceeds(getDoc(doc(o, 'monitor/status')));
+  await assertFails(setDoc(doc(o, 'monitor/status'), { ok: false }));
+  await approve('a');
+  await assertFails(getDoc(doc(as('a'), 'monitor/status')));
+  await assertFails(setDoc(doc(o, 'anything/x'), { a: 1 }));
+  await assertFails(setDoc(doc(as('a'), 'items/x'), item())); // old single-user path is closed
 });

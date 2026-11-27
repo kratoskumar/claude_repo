@@ -1,10 +1,10 @@
 // Offline support. App files are cached per version, so the app opens instantly and offline.
 // IMPORTANT: bump VERSION (and VERSION in app.js) on every change to the app files.
-const VERSION = '1.0.1';
+const VERSION = '1.1.0';
 const CACHE = 'mc-' + VERSION;
 const SDK_PREFIX = 'https://www.gstatic.com/firebasejs/12.19.0/';
 const SDK_CACHE = 'fbsdk-12.19.0';
-const FILES = ['./', 'index.html', 'app.css', 'app.js', 'calc.js', 'rates.js', 'image.js', 'cloud.js', 'config.js',
+const FILES = ['./', 'index.html', 'app.css', 'app.js', 'calc.js', 'rates.js', 'image.js', 'cloud.js', 'admin.js', 'config.js',
   'manifest.webmanifest', 'icon.svg', 'icon-180.png', 'icon-192.png', 'icon-512.png'];
 
 self.addEventListener('install', e => {
@@ -30,6 +30,7 @@ self.addEventListener('fetch', e => {
   const req = e.request;
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
+  if (url.origin === location.origin && url.pathname.includes('/__/')) return; // Firebase sign-in pages: always live
   if (url.origin === location.origin) {
     e.respondWith(caches.open(CACHE).then(async c => (await c.match(req, { ignoreSearch: true })) || fetch(req)));
   } else if (url.href.startsWith(SDK_PREFIX)) {

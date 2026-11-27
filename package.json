@@ -5,12 +5,13 @@
   "description": "Jewellery making-charge calculator (static app in docs/, served by GitHub Pages). Dependencies here are for local testing only.",
   "type": "module",
   "scripts": {
-    "test": "npm run test:unit && npm run test:rules && npm run test:components && npm run test:e2e",
-    "test:unit": "node --test tests/calc.test.mjs tests/rates.test.mjs",
-    "test:rules": "firebase emulators:exec --only firestore --project demo-mc --config firebase/firebase.json \"node --test tests/rules.test.mjs\"",
-    "test:components": "firebase emulators:exec --only auth,firestore --project demo-mc --config firebase/firebase.json \"node tests/components.mjs\"",
-    "test:e2e": "firebase emulators:exec --only auth,firestore --project demo-mc --config firebase/firebase.json \"node tests/e2e.mjs\"",
-    "serve": "node tests/serve.mjs"
+    "test": "npm run test:unit && npm run test:rules && npm run test:monitor && npm run test:components && npm run test:e2e",
+    "test:unit": "node --test tests/calc.test.mjs tests/rates.test.mjs tests/monitor-unit.test.mjs",
+    "test:rules": "firebase emulators:exec --only firestore --project demo-mc \"node --test tests/rules.test.mjs\"",
+    "test:components": "firebase emulators:exec --only auth,firestore --project demo-mc \"node tests/components.mjs\"",
+    "test:e2e": "firebase emulators:exec --only auth,firestore --project demo-mc \"node tests/e2e.mjs\"",
+    "serve": "node tests/serve.mjs",
+    "test:monitor": "firebase emulators:exec --only firestore --project demo-mc \"node --test tests/monitor.test.mjs\""
   },
   "devDependencies": {
     "@firebase/rules-unit-testing": "5.0.2",

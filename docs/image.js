@@ -1,8 +1,8 @@
 // Shrinks photos in the browser before saving, so storage and data use stay small.
 const PHOTO_SIDE = 1280;
-const PHOTO_MAX = 400000; // characters of base64 (~300 KB)
-const THUMB_SIDE = 160;
-const THUMB_MAX = 30000;
+const PHOTO_MAX = 270000; // characters of base64 (~200 KB)
+const THUMB_SIDE = 112;
+const THUMB_MAX = 12000; // ~9 KB: keeps saved lists light to download
 
 function loadImage(file) {
   return new Promise((resolve, reject) => {

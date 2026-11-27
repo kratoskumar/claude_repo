@@ -34,3 +34,8 @@ export async function adminList(col) {
   const j = await r.json();
   return j.documents || [];
 }
+
+export async function adminGet(path) {
+  const r = await fetch(`${FS}/v1/projects/${PROJECT}/databases/(default)/documents/${path}`, { headers: { authorization: 'Bearer owner' } });
+  return r.status === 404 ? null : r.json();
+}
