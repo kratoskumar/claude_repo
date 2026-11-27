@@ -91,6 +91,39 @@ export function making({ price, priceCur, weight, factor, rate24, rateCur, fx, t
   };
 }
 
+// Saved jewellers: name + % they take off the market value of gold traded in (negative = they pay above it).
+export const DEFAULT_JEWELLERS = [{ n: 'Joy Alukkas', d: 3 }];
+export const MAX_JEWELLERS = 10;
+export const validJeweller = j => !!j && typeof j.n === 'string' && j.n.trim().length > 0 && j.n.length <= 40
+  && Number.isFinite(j.d) && j.d >= -20 && j.d <= 50;
+
+// Gold exchange: the market value of your gold, less the jeweller's deduction, is credited toward
+// the jewellery. All amounts are in one currency; rate24 is the 24K market rate per gram.
+// Tax is on the full jewellery price, or with taxOnBalance only on what is left after the credit.
+export function exchange({ weightG, factor, rate24, ded, paid, price, taxPct, taxOnBalance }) {
+  if (!(weightG > 0)) return { ok: false, err: 'weight' };
+  if (!(factor > 0 && factor <= 1)) return { ok: false, err: 'purity' };
+  if (!(rate24 > 0)) return { ok: false, err: 'rate' };
+  const d = Number(ded) || 0;
+  if (d < -20 || d > 50) return { ok: false, err: 'ded' };
+  const value = weightG * factor * rate24;
+  const deduction = (value * d) / 100;
+  const credit = value - deduction;
+  const r = { ok: true, value, deduction, credit, gain: null, gainPct: null, price: null };
+  if (paid > 0) { r.gain = credit - paid; r.gainPct = (r.gain / paid) * 100; }
+  if (price > 0) {
+    const t = Number(taxPct) || 0;
+    if (t < 0 || t > 50) return { ok: false, err: 'tax' };
+    const tax = ((taxOnBalance ? Math.max(0, price - credit) : price) * t) / 100;
+    r.price = price;
+    r.tax = tax;
+    r.total = price + tax;
+    r.balance = r.total - credit; // below zero: the jeweller owes you the difference
+    r.covered = Math.min(1, credit / r.total);
+  }
+  return r;
+}
+
 // Parse user-typed numbers: "1,25,000", "$1,234.50", "12.5 g".
 // comma: 'group' treats commas as thousands separators (prices, rates);
 // 'decimal' treats a lone comma as a decimal point (weights, percentages).

@@ -7,7 +7,7 @@ if (CANONICAL_HOST && location.hostname !== CANONICAL_HOST && (FORWARD_FROM || [
   location.replace(`https://${CANONICAL_HOST}/${location.hash}`);
 }
 
-const VERSION = '1.1.5';
+const VERSION = '1.2.0';
 const $ = id => document.getElementById(id);
 const today = () => C.localISO();
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -57,8 +57,14 @@ function loadDuty() {
   return Array.isArray(d) && d.length && d.every(r => r && C.isISODate(r.from) && Number.isFinite(r.pct) && r.pct >= 0 && r.pct <= 100) ? d : C.DEFAULT_DUTY.map(r => ({ ...r }));
 }
 
+function loadJewellers() {
+  const j = LS.get('mc:jw', null);
+  return Array.isArray(j) && j.length <= C.MAX_JEWELLERS && j.every(C.validJeweller) ? j : C.DEFAULT_JEWELLERS.map(r => ({ ...r }));
+}
+
 const S = loadState();
 let duty = loadDuty();
+let jewellers = loadJewellers();
 let R = { loading: true, date: null }; // current rates
 let saveTimer = 0;
 const persist = () => { clearTimeout(saveTimer); saveTimer = setTimeout(persistNow, 250); };
@@ -304,11 +310,14 @@ $('taxPct').addEventListener('input', e => { S.tax[S.market].pct = e.target.valu
 $('marketSeg').addEventListener('click', e => {
   const v = e.target.closest('button')?.dataset.v;
   if (!v || v === S.market) return;
+  setMarket(v);
+});
+function setMarket(v) {
   S.market = v;
   S.manualRate = null; // a typed rate belongs to one market's currency/unit
   buildPurity();
   persist(); render(); prefsChanged();
-});
+}
 $('curSeg').addEventListener('click', e => {
   const v = e.target.closest('button')?.dataset.v;
   if (!v || v === S.priceCur) return;
@@ -378,12 +387,14 @@ function toast(msg, ms = 2800) {
 }
 
 // ---------- views ----------
-const viewFromHash = () => (location.hash === '#saved' ? 'saved' : location.hash === '#admin' ? 'admin' : 'calc');
+const viewFromHash = () => ({ '#saved': 'saved', '#admin': 'admin', '#exchange': 'exchange' }[location.hash] || 'calc');
 let view = 'calc';
 function setView(v, push = true) {
   if (v === 'admin' && !isOwnerUser()) v = cloudMod || !LS.get('mc:owner', 0) ? 'calc' : 'admin';
   view = v;
   $('calcView').hidden = v !== 'calc';
+  $('xchgView').hidden = v !== 'exchange';
+  $('tabXchg').setAttribute('aria-pressed', String(v === 'exchange'));
   $('savedView').hidden = v !== 'saved';
   $('adminView').hidden = v !== 'admin';
   $('tabCalc').setAttribute('aria-pressed', String(v === 'calc'));
@@ -393,11 +404,45 @@ function setView(v, push = true) {
   if (push && location.hash !== hash) history.pushState(null, '', hash || location.pathname + location.search);
   if (v === 'saved') openSaved();
   if (v === 'admin') openAdmin();
+  if (v === 'exchange') openExchange();
 }
 $('tabCalc').addEventListener('click', () => setView('calc'));
 $('tabSaved').addEventListener('click', () => setView('saved'));
+$('tabXchg').addEventListener('click', () => setView('exchange'));
 $('tabAdmin').addEventListener('click', () => setView('admin'));
 addEventListener('popstate', () => setView(viewFromHash(), false));
+
+// ---------- gold exchange tab (lazy) ----------
+let xMod = null, xLoading = null;
+function openExchange() {
+  if (xMod) { xMod.open(); return; }
+  xLoading ||= import('./exchange.js').then(m => {
+    m.init({
+      LS, toast, today,
+      getMarket: () => S.market,
+      setMarket,
+      getDuty: () => duty,
+      getJewellers: () => jewellers,
+      setJewellers: list => {
+        jewellers = list.map(j => ({ n: j.n, d: j.d }));
+        LS.set('mc:jw', jewellers);
+        prefsChanged();
+      },
+      // The item on the Calculator tab, for "Use Calculator item".
+      calcItem: () => {
+        const c = compute();
+        if (!c.res.ok) return null;
+        return {
+          preTax: c.res.preTax, cur: S.priceCur, fx: c.fx, pct: c.res.pct, taxIncl: c.tax.incl, taxPct: c.taxPct,
+          label: `${S.k === 'custom' ? `${S.customPct}%` : `${S.k}K`} · ${C.plain(c.wt, 3)} g`
+        };
+      },
+      onDialogClose: runPendingUpdate
+    });
+    xMod = m;
+    if (view === 'exchange') m.open();
+  }).catch(() => { xLoading = null; toast('Could not load the Exchange tab. Check the internet connection.'); });
+}
 
 // ---------- cloud (lazy) ----------
 // user: signed-in account; member: approved (true/false, null = checking); requested: access asked.
@@ -783,7 +828,7 @@ function afterMemberKnown() {
 // ---------- settings that follow each person across devices ----------
 let prefTimer = 0, pushedPrefs = false;
 function prefs() {
-  return { market: S.market, cur: S.priceCur, k: S.k, customPct: S.customPct, tax: S.tax, duty };
+  return { market: S.market, cur: S.priceCur, k: S.k, customPct: S.customPct, tax: S.tax, duty, jewellers };
 }
 function prefsChanged() {
   LS.set('mc:prefT', Date.now());
@@ -806,9 +851,14 @@ function applyRemoteSettings(set) {
     duty = set.duty.map(r => ({ from: r.from, pct: r.pct }));
     LS.set('mc:duty', duty);
   }
+  if (Array.isArray(set.jewellers) && set.jewellers.length <= C.MAX_JEWELLERS && set.jewellers.every(C.validJeweller)) {
+    jewellers = set.jewellers.map(j => ({ n: j.n, d: j.d }));
+    LS.set('mc:jw', jewellers);
+  }
   LS.set('mc:prefT', set.t);
   S.manualRate = null;
   buildPurity(); persist(); render();
+  if (xMod) xMod.render();
 }
 
 // ---------- save ----------
@@ -1137,6 +1187,7 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState !== 'visible') { persistNow(); if (cloudMod) cloudMod.flush().catch(() => {}); return; }
   if (!S.date) loadRates(); // refresh "today" (cached for 10 minutes)
   if (view === 'admin') openAdmin(); // fresh numbers when coming back to the app
+  if (view === 'exchange') openExchange();
 });
 addEventListener('pagehide', persistNow);
 

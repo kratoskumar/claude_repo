@@ -62,6 +62,15 @@ async function mockRates(ctx) {
   await ctx.route(/api\.frankfurter\.dev/, r => (MOCK.down ? r.abort() : r.fulfill({ json: { date: (r.request().url().match(/\d{4}-\d{2}-\d{2}/) || [TODAY])[0], rates: { INR: MOCK.frank } }, headers })));
 }
 
+// Every tab and the settings button stay on screen (nothing pushed off or overlapping).
+async function headerFits(pg, who) {
+  const [right, width] = await pg.evaluate(() => [Math.max(...[...document.querySelectorAll('.top *')].filter(e => e.getClientRects().length)
+    .map(e => e.getBoundingClientRect().right)), document.documentElement.clientWidth]);
+  check(right <= width, `${who}: tabs cut off (${right} > ${width})`);
+  const tabs = await pg.$$eval('.tab', els => els.filter(e => e.getClientRects().length).map(e => e.getBoundingClientRect()).map(r => [r.left, r.right, r.top]));
+  for (let i = 1; i < tabs.length; i++) check(tabs[i][2] !== tabs[i - 1][2] || tabs[i][0] >= tabs[i - 1][1] - 0.5, `${who}: tabs overlap`);
+}
+
 async function openSaveDlg(p) {
   await p.click('#saveBtn');
   await p.waitForSelector('#saveDlg[open]', { timeout: 15000 });
@@ -251,6 +260,113 @@ try {
     MOCK.down = false;
   });
 
+  await step('Exchange tab: 1 oz bar at Joy Alukkas (3% off), sales tax, gain', async () => {
+    await p.click('#marketSeg [data-v="US"]');
+    await p.click('#tabXchg');
+    check(new URL(p.url()).hash === '#exchange', 'address ' + p.url());
+    await waitText(p, '#xRateStatus', 'Live spot price $2,400/oz');
+    check(await p.inputValue('#xRate') === '2,400', 'rate ' + await p.inputValue('#xRate'));
+    check(await p.inputValue('#xWt') === '1' && await p.getAttribute('#xUnitSeg [data-v="oz"]', 'aria-pressed') === 'true', '1 oz by default');
+    check(await p.inputValue('#xJw') === 'Joy Alukkas', 'default jeweller');
+    await waitText(p, '#xJwSub', 'Takes 3% off the market value');
+    await waitText(p, '#xHeadLabel', 'Exchange credit');
+    await waitText(p, '#xAmt', '$2,328.00');
+    await p.fill('#xPrice', '3,500');
+    await p.fill('#xTax', '6.625');
+    await p.fill('#xPaid', '2,000');
+    await waitText(p, '#xAmt', '$1,403.88');
+    check(await p.textContent('#xHeadLabel') === 'You pay', 'label');
+    check(await p.textContent('#xAlt') === 'Your gold covers 62.4% of the bill', 'covered ' + await p.textContent('#xAlt'));
+    check(await p.textContent('#xCredit') === '$2,328.00' && await p.textContent('#xTotal') === '$3,731.88', 'tiles');
+    const bd = await p.textContent('#xBreakdown');
+    for (const t of ['Gold value (31.103 g fine × $77.16/g)$2,400.00', '− Joy Alukkas takes 3%$72.00', '+ Sales tax 6.625%$231.88', '+$328.00 (+16.4%)']) check(bd.includes(t), `breakdown lacks "${t}": ${bd}`);
+    check(!(await visible(p, '#xCompareWrap')), 'no comparison with one jeweller');
+    await p.check('#xTaxBal');
+    await waitText(p, '#xBreakdown', '(on balance)');
+    check((await p.textContent('#xAmt')).startsWith('$1,249.6'), 'tax on balance ' + await p.textContent('#xAmt'));
+    await p.uncheck('#xTaxBal');
+    await waitText(p, '#xAmt', '$1,403.88');
+    await p.fill('#xWt', '1..5');
+    await waitText(p, '#xWarn', 'The weight is not a valid number');
+    check(await p.getAttribute('#xWt', 'aria-invalid') === 'true', 'bad weight flagged');
+    await p.fill('#xWt', '1');
+    await waitText(p, '#xAmt', '$1,403.88');
+  });
+
+  await step('Exchange: save jewellers, compare them, and the "jeweller owes you" case', async () => {
+    await p.click('#xJwEdit');
+    await p.waitForSelector('#jwDlg[open]');
+    await p.click('#jwAdd');
+    let row = p.locator('.jw-row').nth(1).locator('input');
+    await row.nth(0).fill('Malabar Gold');
+    await row.nth(1).fill('1.5');
+    await p.click('#jwAdd');
+    row = p.locator('.jw-row').nth(2).locator('input');
+    await row.nth(1).fill('2');
+    await waitText(p, '#jwErr', 'not saved'); // a row with no name
+    await row.nth(0).fill('Premium Jewels');
+    await row.nth(1).fill('-1');
+    check(!(await visible(p, '#jwErr')), 'all rows valid');
+    await p.click('#jwClose');
+    await waitText(p, '#xCompare', 'Premium Jewels (adds 1%)$2,424.00');
+    const cmp = await p.textContent('#xCompare');
+    check(cmp.indexOf('Premium') < cmp.indexOf('Malabar') && cmp.indexOf('Malabar') < cmp.indexOf('Joy'), 'best credit first: ' + cmp);
+    check(cmp.includes('Malabar Gold (takes 1.5%)$2,364.00'), cmp);
+    check(await p.textContent('#xCompare b') === '$2,328.00', 'chosen jeweller highlighted');
+    await p.selectOption('#xJw', 'Malabar Gold');
+    await waitText(p, '#xCredit', '$2,364.00');
+    await p.fill('#xPrice', '2,000');
+    await waitText(p, '#xHeadLabel', 'Jeweller owes you');
+    await waitText(p, '#xWarn', 'cash or as store credit');
+    // renaming the chosen jeweller keeps it chosen; everything survives a reload
+    await p.click('#xJwEdit');
+    await p.locator('.jw-row').nth(1).locator('input').nth(0).fill('Malabar');
+    await p.click('#jwClose');
+    check(await p.inputValue('#xJw') === 'Malabar', 'renamed jeweller still chosen');
+    await p.fill('#xPrice', '3,500');
+    await p.waitForTimeout(400);
+    await p.reload();
+    await waitText(p, '#xCredit', '$2,364.00');
+    check(await p.inputValue('#xPrice') === '3,500' && await p.inputValue('#xTax') === '6.625' && await p.inputValue('#xPaid') === '2,000', 'inputs kept');
+    check((await p.$$eval('#xJw option', o => o.map(x => x.value))).join('|') === 'Joy Alukkas|Malabar|Premium Jewels', 'jewellers kept');
+    // remove the extra ones again
+    await p.click('#xJwEdit');
+    await p.click('.jw-row:nth-child(3) button');
+    await p.click('.jw-row:nth-child(2) button');
+    await p.click('#jwClose');
+    check(await p.inputValue('#xJw') === 'Joy Alukkas', 'falls back to the remaining jeweller');
+    check(!(await visible(p, '#xCompareWrap')), 'comparison hidden again');
+  });
+
+  await step('Exchange: use the Calculator item, grams, India rate', async () => {
+    await p.click('#tabCalc');
+    await p.click('#curSeg [data-v="USD"]');
+    await p.fill('#price', '649'); await p.fill('#wt', '5.2'); await p.selectOption('#purity', '14'); await p.fill('#other', '40');
+    await waitText(p, '#mkAmt', '$374.94');
+    await p.click('#tabXchg');
+    await p.click('#xUseCalc');
+    check(await p.inputValue('#xPrice') === '649', 'price copied ' + await p.inputValue('#xPrice'));
+    await waitText(p, '#xFrom', 'From Calculator: 14K · 5.2 g · making 160.2% of gold value.');
+    await p.click('#xUnitSeg [data-v="g"]');
+    check(await p.inputValue('#xWt') === '31.1035', 'same gold in grams ' + await p.inputValue('#xWt'));
+    await waitText(p, '#xCredit', '$2,328.00');
+    await p.fill('#xPrice', '700');
+    check(await p.textContent('#xFrom') === '', 'typing a price clears the note');
+    await p.click('#xMarketSeg [data-v="IN"]');
+    await waitText(p, '#xRateLabel', '24K rate today (₹/10 g)');
+    await waitText(p, '#xRateStatus', 'India estimate includes 15% import duty');
+    check(await p.inputValue('#xTax') === '3', 'GST 3% for India');
+    check(await p.getAttribute('#marketSeg [data-v="IN"]', 'aria-pressed') === 'true', 'market shared with the Calculator');
+    await p.fill('#xRate', '75,000');
+    await waitText(p, '#xRateStatus', 'Using your typed rate');
+    await waitText(p, '#xCredit', '₹2,26,278'); // 31.1035 g × ₹7,500/g × 97%
+    await p.click('#xResetRate');
+    await p.click('#xMarketSeg [data-v="US"]');
+    await p.click('#xUnitSeg [data-v="oz"]');
+    await waitText(p, '#xCredit', '$2,328.00');
+    await p.click('#tabCalc');
+  });
+
   await step('phone screenshots (light, dark, small screen) without sideways scrolling', async () => {
     await p.screenshot({ path: OUT + 'phone-light.png', fullPage: true });
     const dark = await browser.newContext({ ...devices['iPhone 13'], colorScheme: 'dark', serviceWorkers: 'block' });
@@ -260,6 +376,10 @@ try {
     await pd.fill('#price', '649'); await pd.fill('#wt', '5.2');
     await waitText(pd, '#mkAmt', '$');
     await pd.screenshot({ path: OUT + 'phone-dark.png' });
+    await pd.click('#tabXchg');
+    await pd.fill('#xPrice', '3,500');
+    await waitText(pd, '#xAmt', '$');
+    await pd.screenshot({ path: OUT + 'phone-dark-exchange.png', fullPage: true });
     await dark.close();
     const se = await browser.newContext({ ...devices['iPhone SE'], serviceWorkers: 'block' });
     await mockRates(se);
@@ -273,6 +393,21 @@ try {
     check(overflow.length === 0, 'cut off on a small screen: ' + overflow.join(', '));
     check(await ps.evaluate(() => document.documentElement.clientWidth) === 320, 'small viewport');
     await ps.screenshot({ path: OUT + 'phone-small.png' });
+    await ps.click('#tabXchg');
+    await ps.fill('#xPrice', '3,500'); await ps.fill('#xPaid', '2,000');
+    await waitText(ps, '#xHeadLabel', 'You pay');
+    const xOverflow = await ps.evaluate(() => [...document.querySelectorAll('body *')]
+      .filter(el => el.getClientRects().length && el.closest('.visually-hidden') === null)
+      .filter(el => el.getBoundingClientRect().right > document.documentElement.clientWidth + 0.5)
+      .map(el => el.id || el.className || el.tagName));
+    check(xOverflow.length === 0, 'Exchange tab cut off on a small screen: ' + xOverflow.join(', '));
+    await ps.screenshot({ path: OUT + 'phone-small-exchange.png', fullPage: true });
+    await ps.click('#xJwEdit');
+    await ps.click('#jwAdd');
+    const dOverflow = await ps.evaluate(() => [...document.querySelectorAll('#jwDlg *')]
+      .filter(el => el.getBoundingClientRect().right > document.getElementById('jwDlg').getBoundingClientRect().right + 0.5).map(el => el.id || el.tagName));
+    check(dOverflow.length === 0, 'jeweller dialog cut off: ' + dOverflow.join(', '));
+    await ps.screenshot({ path: OUT + 'phone-small-jewellers.png' });
     await se.close();
   });
   await ctx.close();
@@ -450,6 +585,26 @@ try {
     check(await a.textContent('#savedCount') === '2', 'badge 2');
   });
 
+  await step('Exchange: jewellers sync to the other phone; owner tabs fit', async () => {
+    await a.click('#tabXchg');
+    await waitText(a, '#xRateStatus', 'Live');
+    await a.click('#xJwEdit');
+    await a.click('#jwAdd');
+    const row = a.locator('.jw-row').nth(1).locator('input');
+    await row.nth(0).fill('Tanishq');
+    await row.nth(1).fill('2');
+    await a.click('#jwClose');
+    await w.click('#tabXchg');
+    await until(async () => (await w.$$eval('#xJw option', o => o.map(x => x.value))).includes('Tanishq'), 'jeweller synced to the other phone', 20000);
+    await waitText(w, '#xCompare', 'Tanishq (takes 2%)');
+    check(await visible(a, '#tabAdmin'), 'owner sees Admin');
+    await headerFits(a, 'owner (four tabs)');
+    await headerFits(w, 'owner on a Pixel');
+    await a.screenshot({ path: OUT + 'owner-exchange.png' });
+    await a.click('#tabSaved');
+    await w.click('#tabCalc');
+  });
+
   await step('saving while offline syncs when back online', async () => {
     await a.click('#tabCalc');
     await setIndiaItem(a);
@@ -529,6 +684,9 @@ try {
     await waitText(fr, '#toast', 'Saved');
     const asha = (await adminList('members'))[0].name.split('/').pop();
     check((await adminList(`users/${asha}/items`)).length === 1, 'saved in her own space');
+    await waitText(fr, '#savedCount', '1');
+    check(!(await visible(fr, '#tabAdmin')), 'no Admin tab for a member');
+    await headerFits(fr, 'member with a saved count');
     await a.click('#tabSaved');
     await a.waitForTimeout(800);
     check(!(await a.textContent('#list')).includes('Asha ring'), 'owner does not see friends\' items');

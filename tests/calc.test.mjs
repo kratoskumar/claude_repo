@@ -165,3 +165,49 @@ test('product link sanitising', () => {
     assert.equal(C.safeUrl(bad), null, bad);
   }
 });
+
+test('gold exchange: 1 oz 24K bar at a jeweller that takes 3%', () => {
+  const base = { weightG: C.OZ_G, factor: 1, rate24: 2400 / C.OZ_G, ded: 3 };
+  const credit = C.exchange(base);
+  assert.equal(credit.ok, true);
+  near(credit.value, 2400);
+  near(credit.deduction, 72);
+  near(credit.credit, 2328);
+  assert.equal(credit.price, null); // no jewellery price yet: only the credit
+  assert.equal(credit.gain, null);
+
+  const full = C.exchange({ ...base, paid: 2000, price: 3500, taxPct: 6.625 });
+  near(full.gain, 328);
+  near(full.gainPct, 16.4);
+  near(full.tax, 231.875); // tax on the full price by default
+  near(full.total, 3731.875);
+  near(full.balance, 1403.875);
+  near(full.covered, 2328 / 3731.875);
+
+  const onBal = C.exchange({ ...base, price: 3500, taxPct: 6.625, taxOnBalance: true });
+  near(onBal.tax, (3500 - 2328) * 0.06625);
+  near(onBal.balance, 3500 + (3500 - 2328) * 0.06625 - 2328);
+});
+
+test('gold exchange: jeweller owes you, bonus %, 22K grams, bad input', () => {
+  const owe = C.exchange({ weightG: C.OZ_G, factor: 1, rate24: 2400 / C.OZ_G, ded: 3, price: 2000, taxPct: 3, taxOnBalance: true });
+  near(owe.tax, 0); // nothing left to tax
+  near(owe.balance, -328);
+  assert.equal(owe.covered, 1);
+  const bonus = C.exchange({ weightG: 10, factor: 0.916, rate24: 7000, ded: -2 });
+  near(bonus.value, 64120);
+  near(bonus.credit, 64120 * 1.02);
+  near(C.exchange({ weightG: 10, factor: 1, rate24: 100, ded: 0 }).credit, 1000);
+  for (const [bad, err] of [[{ weightG: 0 }, 'weight'], [{ factor: 1.2 }, 'purity'], [{ rate24: null }, 'rate'], [{ ded: 60 }, 'ded'], [{ ded: -25 }, 'ded'], [{ price: 10, taxPct: 51 }, 'tax']]) {
+    assert.equal(C.exchange({ weightG: 10, factor: 1, rate24: 100, ded: 3, ...bad }).err, err, err);
+  }
+});
+
+test('saved jewellers are validated', () => {
+  assert.ok(C.DEFAULT_JEWELLERS.every(C.validJeweller));
+  assert.deepEqual(C.DEFAULT_JEWELLERS, [{ n: 'Joy Alukkas', d: 3 }]);
+  assert.ok(C.validJeweller({ n: 'Malabar', d: -2 }));
+  for (const bad of [null, { n: '', d: 3 }, { n: '  ', d: 3 }, { n: 'x'.repeat(41), d: 3 }, { n: 'A', d: NaN }, { n: 'A', d: 51 }, { n: 'A', d: -21 }, { n: 'A', d: '3' }]) {
+    assert.equal(C.validJeweller(bad), false, JSON.stringify(bad));
+  }
+});

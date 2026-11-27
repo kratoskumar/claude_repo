@@ -33,9 +33,30 @@ and the GitHub Pages link) forward there, keeping `#saved` and `#admin`.
 - **Rates**: gold-api.com for the live price, plus the currency-api daily feed for gold and USD-INR from 2 Mar 2024 onward.
   Frankfurter (ECB) is the USD-INR fallback. Dates before 2 Mar 2024 ask you to type the gold rate.
 
+## Gold exchange tab
+
+For trading gold you own (for example a 1 oz 24K bar) at a jeweller toward new jewellery. It uses today's live rate,
+the same US / India market as the Calculator, and shows only what helps the decision:
+
+| Step | Formula |
+| --- | --- |
+| Gold value | weight (oz or g) × purity × today's 24K rate |
+| Exchange credit | gold value − the jeweller's % (e.g. Joy Alukkas takes 3%) |
+| Jewellery + tax | price before tax + sales tax / GST |
+| **You pay** | jewellery + tax − exchange credit (below zero: the jeweller owes you the difference) |
+| Gain | exchange credit − what you paid for your gold (optional) |
+
+- **Jewellers** are saved with the % they take off the market value of gold (a minus % means they pay above market).
+  They follow each signed-in person across devices with their other settings (up to 10). Joy Alukkas (3%) is the starting example.
+- With two or more jewellers, the tab lists the exchange credit at each, best first.
+- **Tax**: by default it is charged on the full jewellery price (the safer estimate). Tick "Tax only on the balance after
+  exchange" if the store taxes only what is left after the trade-in. This differs by store and state, so ask.
+- **Use Calculator item** copies the price before tax (and its making %) of the piece on the Calculator tab.
+- The tab's code (`exchange.js`) loads only when the tab is opened.
+
 ## Who can use what
 
-| | Calculator | Saved items | Admin dashboard |
+| | Calculator and Exchange | Saved items | Admin dashboard |
 | --- | --- | --- | --- |
 | Anyone with the link | ✔ | | |
 | Signed in, waiting for approval | ✔ | asks for access | |
@@ -46,7 +67,7 @@ and the GitHub Pages link) forward there, keeping `#saved` and `#admin`.
   Sign in with Apple is not offered: it needs a paid Apple Developer membership ($99/year).
 - New people tap **Request access**. The owner approves or declines in **Admin** and also gets a GitHub alert.
   Approval reaches the person's phone within seconds, without a reload.
-- Each person's items, photos and settings (market, currency, purity, tax and duty table) are private to them
+- Each person's items, photos and settings (market, currency, purity, tax, duty table and jewellers) are private to them
   and follow them across devices. The owner sees only how many items each person has, not the items themselves.
 
 ## Limits that keep it free
@@ -149,10 +170,10 @@ Requires Node 20+, Java 21 (Firebase emulator) and Playwright with Chromium.
 
 ```bash
 npm install
-npm run test:unit        # calculations, number parsing, rates (live + failures), monitor alert rules
+npm run test:unit        # calculations (making charge, gold exchange), number parsing, rates (live + failures), monitor alert rules
 npm run test:rules       # database security rules (owner, members, requests, item cap, privacy)
 npm run test:monitor     # hourly monitor against the emulator with fake Google/GitHub services
 npm run test:components  # photo shrinking, cloud saving, approval flow, dashboard in a real browser
-npm run test:e2e         # 35 end-to-end steps on phone screens, including Google sign-in (emulator)
+npm run test:e2e         # 42 end-to-end steps on phone screens (incl. 320 px wide), including Google sign-in (emulator)
 npm run serve            # local copy at http://127.0.0.1:8000/claude_repo/
 ```

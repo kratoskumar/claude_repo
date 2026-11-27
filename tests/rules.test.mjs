@@ -102,6 +102,20 @@ test('member: own space, add/edit/delete items with photos', async () => {
   if (m.data().count !== 0) throw new Error('count should be 0');
 });
 
+test('settings: saved jewellers for the Exchange tab sync, up to 10', async () => {
+  await approve('a');
+  await meta('a');
+  const db = as('a');
+  const jw = n => Array.from({ length: n }, (_, i) => ({ n: `Jeweller ${i}`, d: 3 }));
+  await assertSucceeds(updateDoc(doc(db, 'users/a'), { set: { market: 'US', jewellers: [{ n: 'Joy Alukkas', d: 3 }], t: 1 } }));
+  await assertSucceeds(updateDoc(doc(db, 'users/a'), { set: { jewellers: jw(10), t: 2 } }));
+  await assertSucceeds(updateDoc(doc(db, 'users/a'), { set: { jewellers: [], t: 3 } }));
+  await assertFails(updateDoc(doc(db, 'users/a'), { set: { jewellers: jw(11), t: 4 } }));
+  await assertFails(updateDoc(doc(db, 'users/a'), { set: { jewellers: 'Joy Alukkas 3%', t: 5 } }));
+  await approve('b');
+  await assertFails(updateDoc(doc(as('b'), 'users/a'), { set: { jewellers: jw(1), t: 6 } })); // not someone else's
+});
+
 test('item cap cannot be bypassed', async () => {
   await approve('a');
   await admin(db => setDoc(doc(db, 'config/app'), { itemLimit: 2, maxMembers: 25 }));
