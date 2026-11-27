@@ -303,7 +303,7 @@ export async function run() {
     alerts: alerts.map(({ key, level, text }) => ({ key, level, text })),
     monthKB: { month, days: kb }
   });
-  console.log(JSON.stringify({ usage, alerts: alerts.map(a => `${a.level}:${a.key}`), purged, actions }, null, 1));
+  console.log(JSON.stringify({ usage, note, alerts: alerts.map(a => `${a.level}:${a.key}`), purged, actions }, null, 1));
   return { usage, alerts, purged, actions };
 }
 
