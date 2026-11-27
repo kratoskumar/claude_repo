@@ -183,6 +183,38 @@ assert.deepEqual(adminView.after.members, ['Asha']);
 assert.equal(adminView.after.limits.itemLimit, 1);
 ok('owner dashboard: sees the request, approves it, sets limits');
 
+const statusText = await page.evaluate(async () => {
+  const A = await import('./admin.js');
+  const C = await import('./cloud.js');
+  const day = C.pacificDay();
+  const show = status => {
+    const root = document.createElement('div');
+    A.render(root, { day, status, stats: { reads: 14 }, limits: { itemLimit: 100, maxMembers: 25 }, requests: [], members: [], users: [], activeToday: 1 }, { toast() {}, refresh() {}, ownerUid: 'owner' });
+    const t = root.textContent;
+    return { status: t.slice(0, t.indexOf('Free plan usage')), storage: /Storage used(.*?)Downloads/.exec(t)[1] };
+  };
+  const ts = Date.now() - 12 * 60000;
+  const appUsage = { day, source: 'app', reads: 14, storageMB: null, egressMonthMB: 0 };
+  return {
+    billing: show({ ts, ok: true, google: 'needs-billing', note: "Using the app's own estimates (exact Google numbers need billing turned on)", alerts: [], usage: appUsage }),
+    oldBilling: show({ ts, ok: true, note: "exact Google numbers unavailable (Monitoring 403 This API method requires billing to be enabled. Please enable billing on project #1 by visiti); using the app's estimates", alerts: [], usage: appUsage }),
+    other: show({ ts, ok: true, google: 'error', note: "exact Google numbers unavailable (Monitoring 500 boom); using the app's estimates", alerts: [], usage: appUsage }),
+    google: show({ ts, ok: true, google: 'ok', note: '', alerts: [], usage: { ...appUsage, source: 'google', storageMB: 5 } })
+  };
+});
+for (const k of ['billing', 'oldBilling']) {
+  assert.match(statusText[k].status, /All good/);
+  assert.match(statusText[k].status, /Alert job last ran 12 min ago · Using the app's own estimates \(exact Google numbers need billing turned on\)/);
+  assert.doesNotMatch(statusText[k].status, /403|visiti/);
+  assert.match(statusText[k].storage, /needs billing to show/);
+  assert.match(statusText[k].storage, /only shares this number when billing is turned on/);
+}
+assert.match(statusText.other.status, /Monitoring 500 boom/, 'real failures keep their detail');
+assert.match(statusText.other.storage, /not available yet/);
+assert.match(statusText.google.status, /Alert job last ran 12 min ago$/);
+assert.match(statusText.google.storage, /5 \/ 1,024 MB · 0%/);
+ok('owner dashboard: plain wording when Google needs billing, details kept for real failures');
+
 const f2 = await friendPage.evaluate(async () => {
   const C = await import('./cloud.js');
   await new Promise(r => setTimeout(r, 600));

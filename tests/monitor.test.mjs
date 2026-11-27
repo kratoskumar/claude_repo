@@ -13,9 +13,11 @@ const get = async path => { const r = await fetch(`${FS}/${path}`, { headers: H 
 let mon, gh;
 const ghIssues = [];
 let googleReads = 46000;
+let googleBilling = false;
 before(async () => {
   await fetch('http://127.0.0.1:8080/emulator/v1/projects/demo-mc/databases/(default)/documents', { method: 'DELETE' });
   mon = http.createServer((req, res) => {
+    if (googleBilling) { res.statusCode = 403; return res.end(JSON.stringify({ error: { code: 403, message: 'This API method requires billing to be enabled. Please enable billing on project #1 by visiting https://console.developers.google.com/billing/enable?project=1 then retry.' } })); }
     const u = new URL(req.url, 'http://x');
     const f = u.searchParams.get('filter');
     const v = f.includes('read_count') ? googleReads : f.includes('write_count') ? 1200 : f.includes('delete_count') ? 30 : 5 * 1048576;
@@ -92,6 +94,24 @@ test('hourly run: usage summary, alerts as issues, purge of removed members', as
   assert.equal(out3.usage.reads, 100);
   const s3 = await get('monitor/status');
   assert.match(s3.fields.note.stringValue, /using the app's estimates/);
+  assert.equal(s3.fields.google.stringValue, 'error');
+
+  // Free Spark plan: Google refuses for lack of billing -> app estimates, plain note, no alert about it.
+  process.env.MONITORING_URL = `http://127.0.0.1:${mon.address().port}/v3`;
+  googleBilling = true;
+  const out4 = await run();
+  assert.equal(out4.usage.source, 'app');
+  assert.equal(out4.usage.storageMB, null);
+  assert.deepEqual(out4.alerts.map(a => a.key).sort(), ['itemcap', 'quota']);
+  const s4 = await get('monitor/status');
+  assert.equal(s4.fields.google.stringValue, 'needs-billing');
+  assert.equal(s4.fields.note.stringValue, "Using the app's own estimates (exact Google numbers need billing turned on)");
+
+  googleBilling = false;
+  await run();
+  const s5 = await get('monitor/status');
+  assert.equal(s5.fields.google.stringValue, 'ok');
+  assert.equal(s5.fields.note.stringValue, '');
 });
 
 test('skips quietly when not set up', async () => {
